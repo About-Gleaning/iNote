@@ -33,6 +33,7 @@ struct ContentView: View {
             EntryView()
         }
         .accentColor(AppColors.accent)
+        .environment(\.locale, Locale(identifier: "zh_CN"))
     }
 }
 

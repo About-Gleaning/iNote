@@ -21,6 +21,8 @@ struct NoteDetailView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     if isEditing {
                         TextField("标题", text: $note.title)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(false)
                             .font(AppFonts.title1())
                             .foregroundColor(AppColors.primaryText)
                     } else if !note.title.isEmpty {
@@ -80,13 +82,8 @@ struct NoteDetailView: View {
                     }
                     
                     if isEditing {
-                        TextEditor(text: $note.content)
+                        MultilineTextEditor(text: $note.content, minHeight: 240, placeholder: "请输入正文...")
                             .font(AppFonts.body())
-                            .frame(minHeight: 240)
-                            .padding(8)
-                            .background(AppColors.cardBackground)
-                            .cornerRadius(12)
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppColors.divider))
                     } else if !note.content.isEmpty {
                         Text(note.content)
                             .font(AppFonts.body())
@@ -102,13 +99,8 @@ struct NoteDetailView: View {
                             Text("视觉描述")
                                 .font(AppFonts.headline())
                                 .foregroundColor(AppColors.primaryText)
-                            TextEditor(text: $note.visualDescription)
+                            MultilineTextEditor(text: $note.visualDescription, minHeight: 100, placeholder: "请输入视觉描述...")
                                 .font(AppFonts.body())
-                                .frame(minHeight: 100)
-                                .padding(8)
-                                .background(AppColors.cardBackground)
-                                .cornerRadius(12)
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppColors.divider))
                         }
                     } else if !note.visualDescription.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
@@ -142,25 +134,15 @@ struct NoteDetailView: View {
                             Text("语音逐字稿")
                                 .font(AppFonts.headline())
                                 .foregroundColor(AppColors.primaryText)
-                            TextEditor(text: $note.transcript)
+                            MultilineTextEditor(text: $note.transcript, minHeight: 120, placeholder: "请输入语音逐字稿...")
                                 .font(AppFonts.body())
-                                .frame(minHeight: 120)
-                                .padding(8)
-                                .background(AppColors.cardBackground)
-                                .cornerRadius(12)
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppColors.divider))
                         }
                         VStack(alignment: .leading, spacing: 8) {
                             Text("AI总结")
                                 .font(AppFonts.headline())
                                 .foregroundColor(AppColors.primaryText)
-                            TextEditor(text: $note.summary)
+                            MultilineTextEditor(text: $note.summary, minHeight: 100, placeholder: "请输入 AI 总结...")
                                 .font(AppFonts.body())
-                                .frame(minHeight: 100)
-                                .padding(8)
-                                .background(AppColors.cardBackground)
-                                .cornerRadius(12)
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppColors.divider))
                         }
                     } else {
                         if !note.transcript.isEmpty {
@@ -199,6 +181,7 @@ struct NoteDetailView: View {
         }
         .navigationTitle("笔记")
         .navigationBarTitleDisplayMode(.inline)
+        .ignoresSafeArea(.keyboard)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(isEditing ? "完成" : "编辑") {
@@ -208,7 +191,15 @@ struct NoteDetailView: View {
                     }
                 }
             }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("收起键盘") { dismissKeyboard() }
+            }
         }
+    }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 

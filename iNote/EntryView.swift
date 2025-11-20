@@ -31,7 +31,7 @@ struct EntryView: View {
     @State private var editedVisual: String = ""
     @State private var selectedTagNames: Set<String> = []
     @State private var searchText: String = ""
-    @State private var searchFocused: Bool = false
+    @FocusState private var searchFocused: Bool
     @Query private var allTags: [Tag]
     private let tagOptions: [String] = ["开心","生气","难过","工作","运动","睡眠"]
     enum ConfirmFocus { case title, text, transcript, summary, visual }
@@ -42,23 +42,8 @@ struct EntryView: View {
             AppColors.background.ignoresSafeArea()
             
             VStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(AppColors.secondaryText)
-                    FocusableTextField(text: $searchText, isFocused: Binding(get: { searchFocused }, set: { searchFocused = $0 }), placeholder: "搜索笔记")
-                        .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] }
-                        .padding(.vertical, 2)
-                }
-                .padding(12)
-                .background(AppColors.cardBackground)
-                .cornerRadius(12)
-                .padding(.horizontal, AppDimens.padding)
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        print("DEBUG: Search container tapped, setting focus")
-                        searchFocused = true
-                    }
-                )
+                SearchBar(text: $searchText, focus: $searchFocused)
+                    .padding(.horizontal, AppDimens.padding)
                 // Notes List Area
                 List {
                     ForEach(filteredNotes) { note in
@@ -123,15 +108,7 @@ struct EntryView: View {
             }
         }
         
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("完成") {
-                    print("DEBUG: Keyboard dismiss button tapped")
-                    searchFocused = false
-                }
-            }
-        }
+        .keyboardDismissToolbar("完成") { searchFocused = false }
         .sheet(isPresented: $showTranscriptionEditor) { confirmEditorView() }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker(kind: cameraKind, onImageData: { data in
@@ -234,47 +211,77 @@ struct EntryView: View {
                         VStack {
                             Spacer()
                             VStack(spacing: 12) {
-                                HStack {
-                                    Text("更多")
-                                        .font(AppFonts.headline())
-                                        .foregroundColor(AppColors.primaryText)
-                                    Spacer()
-                                }
                                 Button(action: { unavailableMessage = "未开放该功能"; showUnavailableAlert = true; showMoreMenu = false }) {
-                                    Text("链接")
-                                        .font(AppFonts.headline())
-                                        .foregroundColor(AppColors.primaryText)
-                                        .frame(maxWidth: .infinity)
-                                        .padding()
-                                        .background(AppColors.cardBackground)
-                                        .cornerRadius(12)
+                                    HStack {
+                                        Image(systemName: "link")
+                                            .foregroundColor(AppColors.secondaryText)
+                                        Text("链接")
+                                            .font(AppFonts.headline())
+                                            .foregroundColor(AppColors.primaryText)
+                                        Spacer()
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(AppColors.cardBackground)
+                                    .cornerRadius(12)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(AppColors.divider, lineWidth: 1)
+                                    )
                                 }
                                 Button(action: { showAlbumTypeMenu = true; showMoreMenu = false }) {
-                                    Text("相册")
-                                        .font(AppFonts.headline())
-                                        .foregroundColor(.white)
-                                        .frame(maxWidth: .infinity)
-                                        .padding()
-                                        .background(AppColors.accent)
-                                        .cornerRadius(12)
+                                    HStack {
+                                        Image(systemName: "photo.on.rectangle")
+                                            .foregroundColor(AppColors.secondaryText)
+                                        Text("相册")
+                                            .font(AppFonts.headline())
+                                            .foregroundColor(AppColors.primaryText)
+                                        Spacer()
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(AppColors.cardBackground)
+                                    .cornerRadius(12)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(AppColors.divider, lineWidth: 1)
+                                    )
                                 }
                                 Button(action: { unavailableMessage = "未开放该功能"; showUnavailableAlert = true; showMoreMenu = false }) {
-                                    Text("拍笔记")
-                                        .font(AppFonts.headline())
-                                        .foregroundColor(AppColors.primaryText)
-                                        .frame(maxWidth: .infinity)
-                                        .padding()
-                                        .background(AppColors.cardBackground)
-                                        .cornerRadius(12)
+                                    HStack {
+                                        Image(systemName: "pencil")
+                                            .foregroundColor(AppColors.primaryText)
+                                        Text("拍笔记")
+                                            .font(AppFonts.headline())
+                                            .foregroundColor(AppColors.primaryText)
+                                        Spacer()
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(AppColors.cardBackground)
+                                    .cornerRadius(12)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(AppColors.divider, lineWidth: 1)
+                                    )
                                 }
                                 Button(action: { showMoreMenu = false }) {
-                                    Text("取消")
-                                        .font(AppFonts.headline())
-                                        .foregroundColor(AppColors.secondaryText)
-                                        .frame(maxWidth: .infinity)
-                                        .padding()
-                                        .background(AppColors.cardBackground)
-                                        .cornerRadius(12)
+                                    HStack {
+                                        Image(systemName: "xmark.circle")
+                                            .foregroundColor(AppColors.secondaryText)
+                                        Text("取消")
+                                            .font(AppFonts.headline())
+                                            .foregroundColor(AppColors.secondaryText)
+                                        Spacer()
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(AppColors.cardBackground)
+                                    .cornerRadius(12)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(AppColors.divider, lineWidth: 1)
+                                    )
                                 }
                             }
                             .padding(.horizontal, AppDimens.padding)
@@ -333,28 +340,7 @@ struct EntryView: View {
         }
     }
 
-    @ViewBuilder
-    private func editorArea() -> some View {
-        ZStack(alignment: .topLeading) {
-            FocusableTextView(text: $vm.text, isFocused: Binding(get: { textFocused }, set: { textFocused = $0 }))
-                .frame(minHeight: 180)
-                .padding(8)
-                .background(AppColors.cardBackground)
-                .cornerRadius(12)
-                .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
-                .onTapGesture { textFocused = true }
-            
-            if vm.text.isEmpty {
-                Text("请输入文字内容...")
-                    .font(AppFonts.body())
-                    .foregroundColor(AppColors.secondaryText)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 16)
-                    .allowsHitTesting(false)
-            }
-        }
-        .padding(.horizontal, AppDimens.padding)
-    }
+    
 
 
 
@@ -403,7 +389,7 @@ struct EntryView: View {
     private func statusArea() -> some View {
         if let status = vm.currentNote?.aiStatus, !status.isEmpty {
             HStack {
-                Text("AI状态：\(status)")
+                Text("AI状态：\(localizedAIStatus(status))")
                     .font(AppFonts.caption())
                     .foregroundColor(AppColors.secondaryText)
                 
@@ -426,119 +412,18 @@ struct EntryView: View {
         }
     }
 
-    struct FocusableTextView: UIViewRepresentable {
-        @Binding var text: String
-        @Binding var isFocused: Bool
-
-        final class FocusUITextView: UITextView {
-            var shouldFocus: Bool = false
-            override func didMoveToWindow() {
-                super.didMoveToWindow()
-                if shouldFocus, window != nil {
-                    DispatchQueue.main.async { [weak self] in
-                        self?.becomeFirstResponder()
-                        self?.shouldFocus = false
-                    }
-                }
-            }
-        }
-
-        func makeUIView(context: Context) -> FocusUITextView {
-            let tv = FocusUITextView()
-            tv.delegate = context.coordinator
-            tv.font = UIFont.preferredFont(forTextStyle: .body)
-            tv.backgroundColor = .clear
-            tv.isScrollEnabled = true
-            tv.keyboardDismissMode = .interactive
-            return tv
-        }
-
-        func updateUIView(_ uiView: FocusUITextView, context: Context) {
-            if uiView.text != text { uiView.text = text }
-            if isFocused {
-                if uiView.window != nil {
-                    if !uiView.isFirstResponder { uiView.becomeFirstResponder() }
-                } else {
-                    uiView.shouldFocus = true
-                }
-            } else {
-                if uiView.isFirstResponder { uiView.resignFirstResponder() }
-            }
-        }
-
-        func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-        final class Coordinator: NSObject, UITextViewDelegate {
-            var parent: FocusableTextView
-            init(_ parent: FocusableTextView) { self.parent = parent }
-            func textViewDidChange(_ textView: UITextView) { parent.text = textView.text }
+    private func localizedAIStatus(_ code: String) -> String {
+        switch code {
+        case "requesting": return "请求中"
+        case "success": return "成功"
+        case "unauthorized": return "未授权"
+        case "payment_required": return "需付费"
+        case "error": return "错误"
+        default: return code
         }
     }
 
-    struct FocusableTextField: UIViewRepresentable {
-        @Binding var text: String
-        @Binding var isFocused: Bool
-        var placeholder: String
-
-        final class FocusUITextField: UITextField {
-            var shouldFocus: Bool = false
-            override func didMoveToWindow() {
-                super.didMoveToWindow()
-                if shouldFocus, window != nil {
-                    DispatchQueue.main.async { [weak self] in
-                        self?.becomeFirstResponder()
-                        self?.shouldFocus = false
-                    }
-                }
-            }
-            override var intrinsicContentSize: CGSize {
-                let s = super.intrinsicContentSize
-                return CGSize(width: s.width, height: max(20, s.height.isFinite ? s.height : 20))
-            }
-        }
-
-        func makeUIView(context: Context) -> FocusUITextField {
-            let tf = FocusUITextField()
-            tf.delegate = context.coordinator
-            tf.borderStyle = .none
-            tf.backgroundColor = .clear
-            tf.font = UIFont.preferredFont(forTextStyle: .body)
-            tf.autocorrectionType = .no
-            tf.autocapitalizationType = .none
-            tf.placeholder = placeholder
-            tf.setContentHuggingPriority(.defaultHigh, for: .vertical)
-            tf.setContentCompressionResistancePriority(.required, for: .vertical)
-            return tf
-        }
-
-        func updateUIView(_ uiView: FocusUITextField, context: Context) {
-            if uiView.text != text { uiView.text = text }
-            if isFocused {
-                if uiView.window != nil {
-                    if !uiView.isFirstResponder { uiView.becomeFirstResponder(); uiView.reloadInputViews() }
-                } else {
-                    uiView.shouldFocus = true
-                }
-            } else {
-                if uiView.isFirstResponder { uiView.resignFirstResponder() }
-            }
-        }
-
-        func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-        final class Coordinator: NSObject, UITextFieldDelegate {
-            var parent: FocusableTextField
-            init(_ parent: FocusableTextField) { self.parent = parent }
-            func textFieldDidChangeSelection(_ textField: UITextField) { parent.text = textField.text ?? "" }
-            func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
-                if let t = textField.text as NSString? {
-                    parent.text = t.replacingCharacters(in: range, with: string)
-                }
-                return true
-            }
-            func textFieldShouldReturn(_ textField: UITextField) -> Bool { textField.resignFirstResponder(); parent.isFocused = false; return true }
-        }
-    }
+    
 
     @ViewBuilder
     private func confirmEditorView() -> some View {
@@ -734,6 +619,8 @@ struct CameraPicker: UIViewControllerRepresentable {
                 picker.videoQuality = .typeHigh
             }
             picker.modalPresentationStyle = .fullScreen
+            picker.navigationBar.topItem?.title = "相机"
+            picker.navigationBar.tintColor = UIColor(AppColors.accent)
             picker.delegate = context.coordinator
             return picker
         }
