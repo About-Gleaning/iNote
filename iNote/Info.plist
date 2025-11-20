@@ -6,5 +6,19 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音录入与AI查询</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄图片和视频</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于选择图片和视频</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于保存拍摄的照片或视频</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>用于将语音转换为文字</string>
+	<key>OpenRouterAPIKey</key>
+	<string>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</string>
+	<key>DashScopeAPIKey</key>
+	<string>sk-898c7056a2a44ae6ba0de623b21d204d</string>
 </dict>
 </plist>

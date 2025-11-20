@@ -7,17 +7,25 @@
 
 import SwiftUI
 import SwiftData
+import CloudKit
 
 @main
 struct iNoteApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Note.self,
+            MediaAsset.self,
+            Tag.self
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+
+        let cloudConfig = ModelConfiguration(
+            "cloud",
+            schema: schema,
+            cloudKitDatabase: .automatic
+        )
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try ModelContainer(for: schema, configurations: [cloudConfig])
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
