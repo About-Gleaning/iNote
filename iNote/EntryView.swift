@@ -29,6 +29,10 @@ struct EntryView: View {
     @State private var editedTranscript: String = ""
     @State private var editedSummary: String = ""
     @State private var editedVisual: String = ""
+    @State private var editedTranscriptHeight: CGFloat = 60
+    @State private var editedSummaryHeight: CGFloat = 60
+    @State private var editedVisualHeight: CGFloat = 60
+    @State private var editedTextHeight: CGFloat = 100
     @State private var selectedTagNames: Set<String> = []
     @State private var searchText: String = ""
     @FocusState private var searchFocused: Bool
@@ -49,9 +53,16 @@ struct EntryView: View {
                     ForEach(filteredNotes) { note in
                         NoteCardView(note: note)
                             .contentShape(Rectangle())
-                            .onTapGesture { selectedNoteForNavigation = note }
+                            .onTapGesture {
+                                if searchFocused {
+                                    searchFocused = false
+                                } else {
+                                    selectedNoteForNavigation = note
+                                }
+                            }
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 0, leading: AppDimens.padding, bottom: 0, trailing: AppDimens.padding))
+                            .listRowBackground(AppColors.background)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
                                     pendingDeleteNote = note
@@ -78,6 +89,7 @@ struct EntryView: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(AppColors.background)
+                .preferredColorScheme(.light)
                 .refreshable { await notesVM.refresh(context: context) }
                 
                 modeArea()
@@ -105,6 +117,7 @@ struct EntryView: View {
                 }
                 showTranscriptionEditor = true
                 vm.shouldShowEditor = false
+                vm.persistIfNeeded(context: context)
             }
         }
         
@@ -125,73 +138,113 @@ struct EntryView: View {
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
 
-                if vm.mode == .audioText {
+                if vm.mode == .audioText && !searchFocused {
                     HStack {
-                        Button(action: { showMoreMenu = true }) {
-                            Image(systemName: "ellipsis.circle.fill")
-                                .font(.system(size: 28))
-                                .foregroundColor(AppColors.secondaryText)
+                        if vm.recordState == .idle {
+                            Button(action: { showMoreMenu = true }) {
+                                Image(systemName: "ellipsis.circle.fill")
+                                    .font(.system(size: 28))
+                                    .foregroundColor(AppColors.secondaryText)
+                            }
+                            .padding(.leading, 24)
+                            
+                            Spacer()
+                            
+                            Button(action: {
+                                cameraKind = .photo
+                                showCamera = true
+                            }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(AppColors.cardBackground)
+                                        .frame(width: 56, height: 56)
+                                        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+                                    
+                                    Image(systemName: "camera.fill")
+                                        .font(.system(size: 24))
+                                        .foregroundColor(AppColors.primaryText)
+                                }
+                            }
+                            .padding(.trailing, 20)
                         }
-                        .padding(.leading, 24)
                         
-                        Spacer()
-                        
-                        // Camera Button (Left)
-                        Button(action: {
-                            cameraKind = .photo
-                            showCamera = true
-                        }) {
-                            ZStack {
-                                Circle()
-                                    .fill(AppColors.cardBackground)
-                                    .frame(width: 56, height: 56)
-                                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-                                
-                                Image(systemName: "camera.fill")
-                                    .font(.system(size: 24))
-                                    .foregroundColor(AppColors.primaryText)
+                        if vm.recordState == .idle {
+                            Button(action: { vm.toggleRecord(context: context) }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(AppColors.accent)
+                                        .frame(width: 72, height: 72)
+                                        .shadow(color: AppColors.accent.opacity(0.4), radius: 10, x: 0, y: 4)
+                                        .scaleEffect(1.0)
+                                        .animation(.easeInOut(duration: 0.2), value: vm.recordState == .idle)
+                                    Image(systemName: "mic.fill")
+                                        .font(.system(size: 32))
+                                        .foregroundColor(.white)
+                                }
                             }
                         }
-                        .padding(.trailing, 20)
                         
-                        // Recording Button (Center)
-                        Button(action: { vm.toggleRecord(context: context) }) {
-                            ZStack {
-                                Circle()
-                                    .fill(vm.isRecording ? AppColors.error : AppColors.accent)
-                                    .frame(width: 72, height: 72)
-                                    .shadow(color: (vm.isRecording ? AppColors.error : AppColors.accent).opacity(0.4), radius: 10, x: 0, y: 4)
-                                    .scaleEffect(vm.isRecording ? 1.1 : 1.0)
-                                    .animation(.easeInOut(duration: 0.2), value: vm.isRecording)
-                                
-                                Image(systemName: vm.isRecording ? "stop.fill" : "mic.fill")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(.white)
+                        if vm.recordState == .idle {
+                            Button(action: {
+                                cameraKind = .video
+                                showCamera = true
+                            }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(AppColors.cardBackground)
+                                        .frame(width: 56, height: 56)
+                                        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+                                    
+                                    Image(systemName: "video.fill")
+                                        .font(.system(size: 24))
+                                        .foregroundColor(AppColors.primaryText)
+                                }
                             }
-                        }
-                        
-                        // Video Button (Right)
-                        Button(action: {
-                            cameraKind = .video
-                            showCamera = true
-                        }) {
-                            ZStack {
-                                Circle()
-                                    .fill(AppColors.cardBackground)
-                                    .frame(width: 56, height: 56)
-                                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-                                
-                                Image(systemName: "video.fill")
-                                    .font(.system(size: 24))
-                                    .foregroundColor(AppColors.primaryText)
+                            .padding(.leading, 20)
+                            
+                            Spacer()
+                            
+                            Color.clear.frame(width: 28, height: 28).padding(.trailing, 24)
+                        } else {
+                            Spacer()
+                            VStack(spacing: 6) {
+                                Text(String(format: "%02d:%02d / 00:20", Int(vm.elapsedSeconds) / 60, Int(vm.elapsedSeconds) % 60))
+                                    .font(AppFonts.caption())
+                                    .foregroundColor(AppColors.secondaryText)
+                                HStack(spacing: 16) {
+                                    Button(action: { vm.cancelRecord(context: context); resetUI() }) {
+                                        Text("取消")
+                                            .font(AppFonts.headline())
+                                            .foregroundColor(AppColors.secondaryText)
+                                            .frame(width: 72, height: 44)
+                                            .background(AppColors.cardBackground)
+                                            .cornerRadius(12)
+                                    }
+                                    Button(action: { vm.toggleRecord(context: context) }) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(AppColors.error)
+                                                .frame(width: 72, height: 72)
+                                                .shadow(color: AppColors.error.opacity(0.4), radius: 10, x: 0, y: 4)
+                                                .scaleEffect(1.1)
+                                                .animation(.easeInOut(duration: 0.2), value: vm.recordState == .idle)
+                                            Image(systemName: vm.recordState == .recording ? "pause.fill" : "play.fill")
+                                                .font(.system(size: 32))
+                                                .foregroundColor(.white)
+                                        }
+                                    }
+                                    Button(action: { vm.finishRecord(context: context) }) {
+                                        Text("完成")
+                                            .font(AppFonts.headline())
+                                            .foregroundColor(.white)
+                                            .frame(width: 72, height: 44)
+                                            .background(AppColors.accent)
+                                            .cornerRadius(12)
+                                    }
+                                }
                             }
+                            Spacer()
                         }
-                        .padding(.leading, 20)
-                        
-                        Spacer()
-                        
-                        // Placeholder for symmetry or another action
-                        Color.clear.frame(width: 28, height: 28).padding(.trailing, 24)
                     }
                     .padding(.vertical, 12)
                     .background(AppColors.background.opacity(0.9))
@@ -330,6 +383,11 @@ struct EntryView: View {
         }
     }
 
+    private func sectionSpacing(for h: CGFloat) -> CGFloat {
+        if h < 80 { return 6 }
+        if h < 140 { return 10 }
+        return 12
+    }
     private var filteredNotes: [Note] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if q.isEmpty { return notesVM.notes }
@@ -432,12 +490,14 @@ struct EntryView: View {
                 AppColors.background.ignoresSafeArea()
                 
                 ScrollView {
-                    VStack(spacing: 20) {
+                    VStack(spacing: 0) {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("标题").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
                             TextField("请输入标题", text: $editedTitle)
                                 .focused($confirmFocus, equals: .title)
                                 .textFieldStyle(.plain)
+                                .foregroundColor(AppColors.primaryText)
+                                .tint(AppColors.primaryText)
                                 .padding(12)
                                 .background(AppColors.cardBackground)
                                 .cornerRadius(12)
@@ -449,130 +509,139 @@ struct EntryView: View {
                                 Text("逐字稿").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
                                 TextEditor(text: $editedTranscript)
                                     .focused($confirmFocus, equals: .transcript)
-                                    .frame(minHeight: 120)
+                                    .scrollContentBackground(.hidden)
+                                    .foregroundColor(AppColors.primaryText)
+                                    .tint(AppColors.primaryText)
+                                    .frame(minHeight: max(60, editedTranscriptHeight))
                                     .padding(8)
                                     .background(AppColors.cardBackground)
                                     .cornerRadius(12)
+                                Text(editedTranscript.isEmpty ? " " : editedTranscript)
+                                    .font(AppFonts.body())
+                                    .foregroundColor(.clear)
+                                    .padding(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(
+                                        GeometryReader { geo in
+                                            Color.clear
+                                                .onAppear { editedTranscriptHeight = geo.size.height }
+                                                .onChange(of: editedTranscript) { _, _ in editedTranscriptHeight = geo.size.height }
+                                        }
+                                    )
+                                    .hidden()
                             }
                             .padding(.horizontal, AppDimens.padding)
+                            .padding(.bottom, sectionSpacing(for: editedTranscriptHeight))
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
                             Text("AI总结").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
                             TextEditor(text: $editedSummary)
                                 .focused($confirmFocus, equals: .summary)
-                                .frame(minHeight: 100)
+                                .scrollContentBackground(.hidden)
+                                .foregroundColor(AppColors.primaryText)
+                                .tint(AppColors.primaryText)
+                                .frame(minHeight: max(60, editedSummaryHeight))
                                 .padding(8)
                                 .background(AppColors.cardBackground)
                                 .cornerRadius(12)
+                            Text(editedSummary.isEmpty ? " " : editedSummary)
+                                .font(AppFonts.body())
+                                .foregroundColor(.clear)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear
+                                            .onAppear { editedSummaryHeight = geo.size.height }
+                                            .onChange(of: editedSummary) { _, _ in editedSummaryHeight = geo.size.height }
+                                    }
+                                )
+                                .hidden()
                         }
                         .padding(.horizontal, AppDimens.padding)
+                        .padding(.bottom, sectionSpacing(for: editedSummaryHeight))
 
                         if (vm.currentNote?.assets?.contains(where: { $0.kind == MediaKind.image.rawValue || $0.kind == MediaKind.video.rawValue }) ?? false) {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("视觉描述").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
                                 TextEditor(text: $editedVisual)
                                     .focused($confirmFocus, equals: .visual)
-                                    .frame(minHeight: 100)
+                                    .scrollContentBackground(.hidden)
+                                    .foregroundColor(AppColors.primaryText)
+                                    .tint(AppColors.primaryText)
+                                    .frame(minHeight: max(60, editedVisualHeight))
                                     .padding(8)
                                     .background(AppColors.cardBackground)
                                     .cornerRadius(12)
+                                Text(editedVisual.isEmpty ? " " : editedVisual)
+                                    .font(AppFonts.body())
+                                    .foregroundColor(.clear)
+                                    .padding(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(
+                                        GeometryReader { geo in
+                                            Color.clear
+                                                .onAppear { editedVisualHeight = geo.size.height }
+                                                .onChange(of: editedVisual) { _, _ in editedVisualHeight = geo.size.height }
+                                        }
+                                    )
+                                    .hidden()
+                            }
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.bottom, sectionSpacing(for: editedVisualHeight))
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("文字输入").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
+                            TextEditor(text: $editedText)
+                                .focused($confirmFocus, equals: .text)
+                                .scrollContentBackground(.hidden)
+                                .foregroundColor(AppColors.primaryText)
+                                .tint(AppColors.primaryText)
+                                .frame(minHeight: max(100, editedTextHeight))
+                                .padding(6)
+                                .background(AppColors.cardBackground)
+                                .cornerRadius(12)
+                            Text(editedText.isEmpty ? " " : editedText)
+                                .font(AppFonts.body())
+                                .foregroundColor(.clear)
+                                .padding(6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear
+                                            .onAppear { editedTextHeight = geo.size.height }
+                                            .onChange(of: editedText) { _, _ in editedTextHeight = geo.size.height }
+                                    }
+                                )
+                                .hidden()
+                        }
+                        .padding(.horizontal, AppDimens.padding)
+                        .padding(.bottom, sectionSpacing(for: editedTextHeight))
+
+                        if let tags = vm.currentNote?.tags, !tags.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("标签（AI识别）").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
+                                let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+                                LazyVGrid(columns: columns, spacing: 8) {
+                                    ForEach(tags, id: \.name) { tag in
+                                        Text(tag.name)
+                                            .font(AppFonts.subheadline())
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 8)
+                                            .background(AppColors.cardBackground)
+                                            .foregroundColor(AppColors.primaryText)
+                                            .cornerRadius(12)
+                                    }
+                                }
                             }
                             .padding(.horizontal, AppDimens.padding)
                         }
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("文字输入").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
-                            TextEditor(text: $editedText)
-                                .focused($confirmFocus, equals: .text)
-                                .frame(minHeight: 160)
-                                .padding(8)
-                                .background(AppColors.cardBackground)
-                                .cornerRadius(12)
-                        }
-                        .padding(.horizontal, AppDimens.padding)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("标签").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
-                            let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
-                            LazyVGrid(columns: columns, spacing: 12) {
-                                ForEach(tagOptions, id: \.self) { name in
-                                    let selected = selectedTagNames.contains(name)
-                                    Button(action: {
-                                        if selected { selectedTagNames.remove(name) } else { selectedTagNames.insert(name) }
-                                    }) {
-                                        Text(name)
-                                            .font(AppFonts.subheadline())
-                                            .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 10)
-                                            .background(selected ? AppColors.accent.opacity(0.15) : AppColors.cardBackground)
-                                            .foregroundColor(selected ? AppColors.accent : AppColors.primaryText)
-                                            .cornerRadius(12)
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 12)
-                                                    .stroke(selected ? AppColors.accent : Color.clear, lineWidth: 1)
-                                            )
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.horizontal, AppDimens.padding)
-
-                        HStack(spacing: 16) {
-                            Button(action: {
-                                showTranscriptionEditor = false
-                                vm.pendingTranscription = nil
-                                vm.resetSession()
-                                resetUI()
-                            }) {
-                                Text("取消")
-                                    .font(AppFonts.headline())
-                                    .foregroundColor(AppColors.secondaryText)
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(AppColors.cardBackground)
-                                    .cornerRadius(12)
-                            }
-                            
-                            Button(action: {
-                                vm.text = editedText
-                                if let note = vm.currentNote {
-                                    note.title = editedTitle
-                                    note.content = editedText
-                                    note.transcript = editedTranscript
-                                    note.summary = editedSummary
-                                    note.visualDescription = editedVisual
-                                    var chosen: [Tag] = []
-                                    for name in selectedTagNames {
-                                        if let existed = allTags.first(where: { $0.name == name }) {
-                                            chosen.append(existed)
-                                        } else {
-                                            let t = Tag()
-                                            t.name = name
-                                            context.insert(t)
-                                            chosen.append(t)
-                                        }
-                                    }
-                                    vm.applyTags(chosen)
-                                    vm.persistAndFinalize(context: context)
-                                }
-                                showTranscriptionEditor = false
-                                vm.pendingTranscription = nil
-                                vm.resetSession()
-                                resetUI()
-                            }) {
-                                Text("保存")
-                                    .font(AppFonts.headline())
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(AppColors.accent)
-                                    .cornerRadius(12)
-                            }
-                        }
-                        .padding(.horizontal, AppDimens.padding)
+                        // 操作按钮移至底部固定栏，避免滚动隐藏
                     }
-                    .padding(.vertical, 20)
+                    .padding(.vertical, 12)
                 }
             }
             .navigationTitle("")
@@ -583,6 +652,64 @@ struct EntryView: View {
                 }
             }
             .ignoresSafeArea(.keyboard)
+            .safeAreaInset(edge: .bottom) {
+                HStack(spacing: 16) {
+                    Button(action: {
+                        showTranscriptionEditor = false
+                        vm.pendingTranscription = nil
+                        vm.resetSession()
+                        resetUI()
+                    }) {
+                        Text("取消")
+                            .font(AppFonts.headline())
+                            .foregroundColor(AppColors.secondaryText)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(AppColors.cardBackground)
+                            .cornerRadius(12)
+                    }
+                    Button(action: {
+                        vm.text = editedText
+                        if let note = vm.currentNote {
+                            note.title = editedTitle
+                            note.content = editedText
+                            note.transcript = editedTranscript
+                            note.summary = editedSummary
+                            note.visualDescription = editedVisual
+                            var chosen: [Tag] = []
+                            let names = (note.tags ?? []).map { $0.name }
+                            for name in names {
+                                if let existed = allTags.first(where: { $0.name == name }) {
+                                    chosen.append(existed)
+                                } else {
+                                    let t = Tag()
+                                    t.name = name
+                                    context.insert(t)
+                                    chosen.append(t)
+                                }
+                            }
+                            vm.applyTags(chosen)
+                            vm.persistAndFinalize(context: context)
+                            try? context.save()
+                        }
+                        showTranscriptionEditor = false
+                        vm.pendingTranscription = nil
+                        vm.resetSession()
+                        resetUI()
+                    }) {
+                        Text("保存")
+                            .font(AppFonts.headline())
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(AppColors.accent)
+                            .cornerRadius(12)
+                    }
+                }
+                .padding(.horizontal, AppDimens.padding)
+                .padding(.vertical, 6)
+                .background(AppColors.background.opacity(0.9))
+            }
         }
     }
 

@@ -9,6 +9,9 @@ final class EntryViewModel: ObservableObject {
     @Published var mode: Mode = .audioText
     @Published var text: String = ""
     @Published var isRecording: Bool = false
+    enum RecordState { case idle, recording, paused }
+    @Published var recordState: RecordState = .idle
+    @Published var elapsedSeconds: Double = 0
     @Published var currentNote: Note? = nil
     @Published var selectedTags: [Tag] = []
     @Published var pendingTranscription: String? = nil
@@ -17,6 +20,8 @@ final class EntryViewModel: ObservableObject {
 
     private var recorder: AVAudioRecorder?
     private var autosaveTimer: Timer?
+    private var recordTimer: Timer?
+    private var lastRecordedURL: URL?
 
     func start(context: ModelContext) {
         if currentNote != nil { scheduleAutosave(context: context) }
@@ -36,7 +41,15 @@ final class EntryViewModel: ObservableObject {
     }
 
     func toggleRecord(context: ModelContext) {
-        if isRecording { stopRecord(context: context) } else { startRecord(context: context) }
+        switch recordState {
+        case .idle:
+            startRecord(context: context)
+        case .recording:
+            pauseRecord()
+        case .paused:
+            if elapsedSeconds >= 20 { return }
+            resumeRecord()
+        }
     }
 
     private func startRecord(context: ModelContext) {
@@ -53,6 +66,10 @@ final class EntryViewModel: ObservableObject {
         recorder = try? AVAudioRecorder(url: url, settings: settings)
         recorder?.record()
         isRecording = true
+        recordState = .recording
+        elapsedSeconds = 0
+        recordTimer?.invalidate()
+        recordTimer = Timer.scheduledTimer(timeInterval: 0.1, target: self, selector: #selector(onRecordTimer), userInfo: nil, repeats: true)
     }
 
     func beginNewNote(context: ModelContext) {
@@ -68,10 +85,68 @@ final class EntryViewModel: ObservableObject {
     private func stopRecord(context: ModelContext) {
         recorder?.stop()
         isRecording = false
-        guard let url = recorder?.url else { return }
+        recordState = .idle
+        recordTimer?.invalidate()
+        recordTimer = nil
+        elapsedSeconds = 0
+        guard let url = recorder?.url else { recorder = nil; return }
         attachMedia(kind: .audio, localURL: url, context: context)
         recorder = nil
         Task { await sendAudioAndTextToAI(audioURL: url, context: context) }
+    }
+
+    private func autoStopRecording() {
+        recorder?.stop()
+        lastRecordedURL = recorder?.url
+        isRecording = false
+        recordState = .paused
+        recordTimer?.invalidate()
+        recordTimer = nil
+    }
+
+    @objc private func onRecordTimer() {
+        if let t = recorder?.currentTime { elapsedSeconds = t }
+        if elapsedSeconds >= 20 { autoStopRecording() }
+    }
+
+    private func pauseRecord() {
+        recorder?.pause()
+        recordState = .paused
+    }
+
+    private func resumeRecord() {
+        recorder?.record()
+        recordState = .recording
+    }
+
+    func finishRecord(context: ModelContext) {
+        if recorder != nil {
+            stopRecord(context: context)
+            return
+        }
+        guard let url = lastRecordedURL else { return }
+        attachMedia(kind: .audio, localURL: url, context: context)
+        lastRecordedURL = nil
+        isRecording = false
+        recordState = .idle
+        elapsedSeconds = 0
+        Task { await sendAudioAndTextToAI(audioURL: url, context: context) }
+    }
+
+    func cancelRecord(context: ModelContext) {
+        if let r = recorder {
+            r.stop()
+            let url = r.url
+            try? FileManager.default.removeItem(at: url)
+        }
+        recorder = nil
+        lastRecordedURL = nil
+        recordTimer?.invalidate()
+        recordTimer = nil
+        isRecording = false
+        recordState = .idle
+        elapsedSeconds = 0
+        resetSession()
     }
 
     func attachImageData(_ datas: [Data], context: ModelContext) async {
@@ -270,6 +345,12 @@ final class EntryViewModel: ObservableObject {
         finalize()
     }
 
+    func persistIfNeeded(context: ModelContext) {
+        guard let note = currentNote else { return }
+        if !isNoteInserted { context.insert(note); isNoteInserted = true }
+        try? context.save()
+    }
+
     func resetSession() {
         currentNote = nil
         text = ""
@@ -284,15 +365,16 @@ final class EntryViewModel: ObservableObject {
         note.aiStatus = "requesting"
         let service = QwenService()
         let prompt = """
-        你是一个专业的语音内容分析师。请基于用户上传的音频，输出一个 JSON 对象，包含以下字段：
+        你是一个专业的语音内容分析师。请基于用户上传的音频，只输出一个 JSON 对象，包含以下字段：
 
         {
           "title": "不超过15个汉字的标题",
-          "transcript": "演讲稿（删除非语义填充成分；修正无意义重复；不改写、不总结、不润色，仅做最小必要清理；若有多位说话人，请用 [说话人A]、[说话人B] 标注",
-          "summary": "80–150字的客观摘要，不得发散或添加外部信息"
+          "transcript": "逐字稿",
+          "summary": "80–150字的客观摘要，不得发散或添加外部信息",
+          "tags": ["中文简短标签，至多5个，涉及心情、场景（运动、吃饭、学习、工作等）或核心关键词"]
         }
-        
-        只输出纯 JSON，不要额外文本。
+
+        严格只输出纯 JSON，不要额外文本。
         """
         do {
             print("Qwen 准备调用: chat(audio), 文本长度=\(text.count), 音频路径=\(audioURL.absoluteString)")
@@ -316,10 +398,28 @@ final class EntryViewModel: ObservableObject {
                 }
                 return nil
             }
+            func pickArr(_ dict: [String: Any], keys: [String]) -> [String]? {
+                var lowered: [String: Any] = [:]
+                for (k, v) in dict { lowered[k.lowercased()] = v }
+                for k in keys {
+                    if let v = dict[k] as? [String], !v.isEmpty { return v }
+                    if let v = lowered[k.lowercased()] as? [String], !v.isEmpty { return v }
+                }
+                return nil
+            }
             if let dict = decodeDict(out) {
                 if let t = pick(dict, keys: ["title", "标题"]) { note.title = t }
                 if let tr = pick(dict, keys: ["transcript", "逐字稿", "转写", "text"]) { note.transcript = tr; pendingTranscription = tr }
                 if let s = pick(dict, keys: ["summary", "总结"]) { note.summary = s }
+                if let tagNames = pickArr(dict, keys: ["tags", "标签"]) {
+                    var tags: [Tag] = []
+                    for name in tagNames.prefix(5) {
+                        let t = Tag()
+                        t.name = name
+                        tags.append(t)
+                    }
+                    note.tags = tags
+                }
             } else {
                 let processor = MediaProcessingService()
                 if let localText = try? await processor.transcribeAudio(at: audioURL) {
