@@ -6,13 +6,29 @@ import UIKit
 @MainActor
 final class EntryViewModel: ObservableObject {
     enum Mode { case audioText, imageText, videoText }
+    enum ConfirmSource { case none, photoNote, homePhoto, visualAnalyze }
     @Published var mode: Mode = .audioText
+    @Published var confirmSource: ConfirmSource = .none
     @Published var text: String = ""
+    @Published var shouldShowLinkInput: Bool = false
+    @Published var pendingLinkURL: String = ""
+    @Published var webContent: String = ""
+    @Published var linkMode: Bool = false
     @Published var isRecording: Bool = false
     enum RecordState { case idle, recording, paused }
     @Published var recordState: RecordState = .idle
     @Published var elapsedSeconds: Double = 0
-    @Published var currentNote: Note? = nil
+    @Published var currentNote: Note? = nil {
+        didSet {
+            if currentNote == nil && oldValue != nil {
+                print("DEBUG: ⚠️ currentNote was set to NIL! Previous title was: '\(oldValue?.title ?? "unknown")'")
+                print("DEBUG: Stack trace:")
+                Thread.callStackSymbols.forEach { print("  \($0)") }
+            } else if let note = currentNote {
+                print("DEBUG: currentNote was set to note with title: '\(note.title)'")
+            }
+        }
+    }
     @Published var selectedTags: [Tag] = []
     @Published var pendingTranscription: String? = nil
     @Published var shouldShowEditor: Bool = false
@@ -79,6 +95,10 @@ final class EntryViewModel: ObservableObject {
         text = ""
         selectedTags = []
         pendingTranscription = nil
+        webContent = ""
+        pendingLinkURL = ""
+        shouldShowLinkInput = false
+        confirmSource = .none
         scheduleAutosave(context: context)
     }
 
@@ -156,6 +176,85 @@ final class EntryViewModel: ObservableObject {
             attachMedia(kind: .image, localURL: tempURL, context: context)
         }
         await analyzeVisualForCurrentNote()
+    }
+
+    func createPhotoNote(with imageData: Data, context: ModelContext) async {
+        beginNewNote(context: context)
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("image_\(UUID().uuidString).jpg")
+        try? imageData.write(to: tempURL)
+        attachMedia(kind: .image, localURL: tempURL, context: context)
+        guard let note = currentNote else { return }
+        note.aiStatus = "idle"
+        // OCR disabled: do not extract or prefill text from image
+        if linkMode {
+            shouldShowLinkInput = true
+        } else {
+            // 首页拍照按钮的prompt
+            let instruction = """
+            你是一个专业的图片分析助手。请根据图片内容，输出以下内容。
+            {
+              "title": "不超过15个汉字的标题",
+              "description": "300-500字的详细视觉描述，准确呈现图片内容，不得添加外部信息",
+              "summary": "100–300字，对图片内容的总结，不得发散",
+              "tags": ["至多5个中文简短标签，标签应是基于图片内容"]
+            }
+            请直接输出符合要求的JSON，无需额外说明或解释。
+            """
+            let service = QwenService()
+            do {
+                let out = try await service.analyzeImagesJSON([imageData], instruction: instruction)
+                func decodeDict(_ s: String) -> [String: Any]? {
+                    if let d = s.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { return obj }
+                    if let first = s.firstIndex(of: "{"), let last = s.lastIndex(of: "}") {
+                        let sub = String(s[first...last])
+                        if let d2 = sub.data(using: .utf8), let obj2 = try? JSONSerialization.jsonObject(with: d2) as? [String: Any] { return obj2 }
+                    }
+                    return nil
+                }
+                func pickStr(_ dict: [String: Any], keys: [String]) -> String? {
+                    var lowered: [String: Any] = [:]
+                    for (k, v) in dict { lowered[k.lowercased()] = v }
+                    for k in keys {
+                        if let v = dict[k] as? String, !v.isEmpty { return v }
+                        if let v = lowered[k.lowercased()] as? String, !v.isEmpty { return v }
+                    }
+                    return nil
+                }
+                func pickArr(_ dict: [String: Any], keys: [String]) -> [String]? {
+                    var lowered: [String: Any] = [:]
+                    for (k, v) in dict { lowered[k.lowercased()] = v }
+                    for k in keys {
+                        if let v = dict[k] as? [String], !v.isEmpty { return v }
+                        if let v = lowered[k.lowercased()] as? [String], !v.isEmpty { return v }
+                    }
+                    return nil
+                }
+                if let dict = decodeDict(out) {
+                    if let t = pickStr(dict, keys: ["title", "标题"]) { note.title = t }
+                    if let desc = pickStr(dict, keys: ["description", "视觉描述", "图像描述"]) { note.visualDescription = desc }
+                    if let s = pickStr(dict, keys: ["summary", "总结"]) { note.summary = s }
+                    if let vtr = pickStr(dict, keys: ["visualTranscript", "图片逐字稿", "手写逐字稿", "逐字稿"]) { note.visualTranscript = vtr }
+                    if let tagNames = pickArr(dict, keys: ["tags", "标签"]) {
+                        var tags: [Tag] = []
+                        for name in tagNames.prefix(5) {
+                            let t = Tag(); t.name = name; tags.append(t)
+                        }
+                        note.tags = tags
+                    }
+                }
+                if note.title.isEmpty {
+                    let base = !text.isEmpty ? text : (!note.transcript.isEmpty ? note.transcript : note.summary)
+                    note.title = String(base.split(separator: "\n").first ?? "")
+                }
+                note.aiStatus = "success"
+                confirmSource = .homePhoto
+                shouldShowEditor = true
+            } catch {
+                note.aiStatus = "error"
+                confirmSource = .homePhoto
+                shouldShowEditor = true
+            }
+        }
     }
 
     func attachVideoURLs(_ urls: [URL], context: ModelContext) async {
@@ -264,7 +363,7 @@ final class EntryViewModel: ObservableObject {
             }
         }
         let service = QwenService()
-        let instruction = "请基于这些图片/关键帧，只输出 JSON：{\"title\": string, \"description\": string, \"summary\": string, \"tags\": [string]}。要求：\n1) title 不超过15字\n2) description 详细描述图片与视频内容，500字内\n3) summary 80-150字，严格如实不发散\n4) tags 至多5个，中文，简短。"
+        let instruction = "请基于这些图片/关键帧，只输出 JSON：{\"title\": string, \"description\": string, \"summary\": string, \"visualTranscript\": string, \"tags\": [string]}。要求：\n1) title 不超过15字\n2) description 详细描述图片与视频内容，500字内\n3) summary 80-150字，严格如实不发散\n4) visualTranscript 准确还原图片中手写内容\n5) tags 至多5个，中文，简短。"
         do {
             let out = try await service.analyzeImagesJSON(imagesData, instruction: instruction)
             func decodeDict(_ s: String) -> [String: Any]? {
@@ -297,6 +396,7 @@ final class EntryViewModel: ObservableObject {
                 if let t = pickStr(dict, keys: ["title", "标题"]) { note.title = t }
                 if let desc = pickStr(dict, keys: ["description", "视觉描述", "图像描述"]) { note.visualDescription = desc }
                 if let sum = pickStr(dict, keys: ["summary", "总结"]) { note.summary = sum }
+                if let vtr = pickStr(dict, keys: ["visualTranscript", "图片逐字稿", "手写逐字稿", "逐字稿"]) { note.visualTranscript = vtr }
                 if let tagNames = pickArr(dict, keys: ["tags", "标签"]) {
                     var tags: [Tag] = []
                     for name in tagNames.prefix(5) {
@@ -311,6 +411,7 @@ final class EntryViewModel: ObservableObject {
                 }
             }
             note.aiStatus = "success"
+            confirmSource = .visualAnalyze
             shouldShowEditor = true
             shouldShowEditor = true
         } catch {
@@ -345,19 +446,41 @@ final class EntryViewModel: ObservableObject {
         finalize()
     }
 
-    func persistIfNeeded(context: ModelContext) {
-        guard let note = currentNote else { return }
-        if !isNoteInserted { context.insert(note); isNoteInserted = true }
-        try? context.save()
+    func persistIfNeeded(context: ModelContext, note: Note? = nil) {
+        let noteToSave = note ?? currentNote
+        guard let noteToSave = noteToSave else { 
+            print("DEBUG persistIfNeeded: No note to save (both parameter and currentNote are nil)")
+            return 
+        }
+        print("DEBUG persistIfNeeded: Saving note with title='\(noteToSave.title)', isNoteInserted=\(isNoteInserted)")
+        if !isNoteInserted { 
+            context.insert(noteToSave)
+            isNoteInserted = true
+            print("DEBUG persistIfNeeded: Inserted note into context")
+        }
+        do {
+            try context.save()
+            print("DEBUG persistIfNeeded: Successfully saved context")
+        } catch {
+            print("DEBUG persistIfNeeded: ERROR saving context: \(error)")
+        }
+        NotificationCenter.default.post(name: .noteSaved, object: nil)
+        print("DEBUG persistIfNeeded: Posted noteSaved notification")
     }
 
     func resetSession() {
+        print("DEBUG resetSession: Clearing currentNote (title was: '\(currentNote?.title ?? "nil")')")
         currentNote = nil
         text = ""
         selectedTags = []
         pendingTranscription = nil
         shouldShowEditor = false
+        shouldShowLinkInput = false
         isNoteInserted = false
+        pendingLinkURL = ""
+        webContent = ""
+        linkMode = false
+        confirmSource = .none
     }
 
     func sendAudioAndTextToAI(audioURL: URL, context: ModelContext) async {
@@ -461,5 +584,28 @@ final class EntryViewModel: ObservableObject {
                 if !trimmed.isEmpty { note.summary = trimmed }
             }
         }
+    }
+
+    func fetchWebContent(from urlString: String) async -> String {
+        guard !urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
+        guard let apiURL = URL(string: "http://192.168.102.18:8000/extract") else { return "" }
+        var req = URLRequest(url: apiURL)
+        req.httpMethod = "POST"
+        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: String] = ["url": urlString]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body, options: [])
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            struct Resp: Decodable {
+                struct DataObj: Decodable { let content: String; let url: String }
+                let code: Int
+                let msg: String
+                let data: DataObj?
+            }
+            let decoded = try? JSONDecoder().decode(Resp.self, from: data)
+            if let decoded, decoded.code == 0, let content = decoded.data?.content { return content }
+        } catch {
+        }
+        return ""
     }
 }

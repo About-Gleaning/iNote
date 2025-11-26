@@ -1,8 +1,12 @@
 import Foundation
 import AVFoundation
 import Speech
+import Vision
 
 final class MediaProcessingService {
+    func extractTextFromImage(data: Data) -> String {
+        return ""
+    }
     func transcribeAudio(at url: URL) async throws -> String {
         let auth = await withCheckedContinuation { (cont: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
             SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }

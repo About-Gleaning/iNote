@@ -74,32 +74,41 @@ final class Note {
     var title: String = ""
     var content: String = ""
     var summary: String = ""
+    var integratedSummary: String = ""
+    var visualTranscript: String = ""
     var createdAt: Date = Date.now
     var isDraft: Bool = true
     var aiStatus: String = "idle"
     var transcript: String = ""
     var visualDescription: String = ""
+    var linkURL: String = ""
     @Relationship(deleteRule: .cascade) var assets: [MediaAsset]?
     @Relationship(deleteRule: .nullify) var tags: [Tag]?
 
     init(title: String = "",
          content: String = "",
          summary: String = "",
+         integratedSummary: String = "",
+         visualTranscript: String = "",
          createdAt: Date = Date.now,
          isDraft: Bool = true,
          aiStatus: String = "idle",
          transcript: String = "",
          visualDescription: String = "",
+         linkURL: String = "",
          assets: [MediaAsset]? = nil,
          tags: [Tag]? = nil) {
         self.title = title
         self.content = content
         self.summary = summary
+        self.integratedSummary = integratedSummary
+        self.visualTranscript = visualTranscript
         self.createdAt = createdAt
         self.isDraft = isDraft
         self.aiStatus = aiStatus
         self.transcript = transcript
         self.visualDescription = visualDescription
+        self.linkURL = linkURL
         self.assets = assets
         self.tags = tags
     }

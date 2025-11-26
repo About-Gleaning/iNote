@@ -17,6 +17,8 @@ final class QwenService {
         if let envKey = ProcessInfo.processInfo.environment["DASHSCOPE_API_KEY"], !envKey.isEmpty { return envKey }
         return Bundle.main.object(forInfoDictionaryKey: "DashScopeAPIKey") as? String
     }
+    private let textModel = "qwen3-max"
+    private let omniModel = "qwen3-omni-flash"
 
     func chat(prompt: String) async throws -> String {
         guard let key = apiKey, !key.isEmpty else { throw QwenError.missingAPIKey }
@@ -29,10 +31,10 @@ final class QwenService {
         let content: [AnyEncodable] = [AnyEncodable(MessageContent.text(prompt))]
         let items: [ChatPayload.Item] = [.init(role: "user", content: content)]
         
-        let payload = ChatPayload(model: "qwen3-omni-flash", messages: items, temperature: 0.2)
+        let payload = ChatPayload(model: textModel, messages: items, temperature: 0.2)
         req.httpBody = try JSONEncoder().encode(payload)
 
-        print("Qwen 调用开始: chat, 模型=qwen3-omni-flash, 文本长度=\(prompt.count)")
+        print("Qwen 调用开始: chat, 模型=\(textModel), 文本长度=\(prompt.count)")
 
         let (data, resp) = try await URLSession.shared.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
@@ -64,9 +66,9 @@ final class QwenService {
             let url = "data:image/jpeg;base64,\(base64)"
             content.append(AnyEncodable(MessageContent.imageURL(url)))
         }
-        let payload = ChatPayload(model: "qwen3-omni-flash", messages: [ChatPayload.Item(role: "user", content: content)], temperature: 0.2)
+        let payload = ChatPayload(model: omniModel, messages: [ChatPayload.Item(role: "user", content: content)], temperature: 0.2)
         req.httpBody = try JSONEncoder().encode(payload)
-        print("Qwen 调用开始: describeImages, 模型=qwen3-omni-flash, 图片数=\(datas.count), 大小=\(datas.map{ $0.count })")
+        print("Qwen 调用开始: describeImages, 模型=\(omniModel), 图片数=\(datas.count), 大小=\(datas.map{ $0.count })")
         let (data, resp) = try await URLSession.shared.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
         let bodyPreview = String(data: data, encoding: .utf8) ?? ""
@@ -97,9 +99,9 @@ final class QwenService {
             let url = "data:image/jpeg;base64,\(base64)"
             content.append(AnyEncodable(MessageContent.imageURL(url)))
         }
-        let payload = ChatPayload(model: "qwen3-omni-flash", messages: [ChatPayload.Item(role: "user", content: content)], temperature: 0.2)
+        let payload = ChatPayload(model: omniModel, messages: [ChatPayload.Item(role: "user", content: content)], temperature: 0.2)
         req.httpBody = try JSONEncoder().encode(payload)
-        print("Qwen 调用开始: analyzeImagesJSON, 模型=qwen3-omni-flash, 图片数=\(datas.count)")
+        print("Qwen 调用开始: analyzeImagesJSON, 模型=\(omniModel), 图片数=\(datas.count)")
         let (data, resp) = try await URLSession.shared.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
         let bodyPreview = String(data: data, encoding: .utf8) ?? ""
@@ -181,9 +183,9 @@ extension QwenService {
         let base64 = data.base64EncodedString()
         let dataURI = "data:audio/m4a;base64,\(base64)"
         content.append(AnyEncodable(MessageContent.inputAudio(data: dataURI, format: "m4a")))
-        let payload = ChatPayload(model: "qwen3-omni-flash", messages: [ChatPayload.Item(role: "user", content: content)], temperature: 0.2)
+        let payload = ChatPayload(model: omniModel, messages: [ChatPayload.Item(role: "user", content: content)], temperature: 0.2)
         req.httpBody = try JSONEncoder().encode(payload)
-        print("Qwen 调用开始: chat(audio), 模型=qwen3-omni-flash, 文本长度=\(text.count), 音频字节=\(data.count)")
+        print("Qwen 调用开始: chat(audio), 模型=\(omniModel), 文本长度=\(text.count), 音频字节=\(data.count)")
         let (dataRes, resp) = try await URLSession.shared.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
         let bodyPreview = String(data: dataRes, encoding: .utf8) ?? ""
@@ -199,5 +201,61 @@ extension QwenService {
         let textOut = res.choices.first?.message.content ?? ""
         print("Qwen 结果预览: chat(audio)=\(textOut)")
         return textOut
+    }
+    
+    func searchDiaries(query: String, diaryContext: String) async throws -> String {
+        guard let key = apiKey, !key.isEmpty else { throw QwenError.missingAPIKey }
+        if key.uppercased().contains("YOUR_OPENROUTER_API_KEY") { throw QwenError.invalidAPIKey }
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.addValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let systemPrompt = """
+        你是一个智能日记助手。用户会向你提问，你需要基于用户的日记内容来回答问题。
+        
+        重要规则：
+        1. 主要基于提供的日记内容回答问题。
+        2. 如果日记中没有直接答案，可以基于日记中的事实进行合理的推测和分析，但必须在回答中说明这是推测。
+        3. 如果完全无法从日记中推断出答案，请回答"不知道"。
+        4. 回答要简洁、准确、有帮助。
+        
+        用户的日记内容：
+        \(diaryContext)
+        """
+        
+        let userMessage = "问题：\(query)"
+        
+        print("--- AI Search Prompt Begin ---")
+        print(systemPrompt)
+        print(userMessage)
+        print("--- AI Search Prompt End ---")
+        
+        let content: [AnyEncodable] = [
+            AnyEncodable(MessageContent.text(systemPrompt)),
+            AnyEncodable(MessageContent.text(userMessage))
+        ]
+        let items: [ChatPayload.Item] = [.init(role: "user", content: content)]
+        
+        let payload = ChatPayload(model: textModel, messages: items, temperature: 0.2)
+        req.httpBody = try JSONEncoder().encode(payload)
+        
+        print("Qwen 调用开始: searchDiaries, 模型=\(textModel), 查询长度=\(query.count), 日记上下文长度=\(diaryContext.count)")
+        
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        let bodyPreview = String(data: data, encoding: .utf8) ?? ""
+        print("Qwen 返回: searchDiaries, 状态=\(status), 字节数=\(data.count)")
+        if status != 200 {
+            let preview = String(bodyPreview.prefix(300))
+            print("Qwen 错误响应预览: searchDiaries=\(preview)")
+            if status == 401 { throw QwenError.unauthorized(preview) }
+            if status == 402 { throw QwenError.paymentRequired(preview) }
+            throw QwenError.httpError(status, preview)
+        }
+        let res = try JSONDecoder().decode(ChatResponse.self, from: data)
+        let text = res.choices.first?.message.content ?? ""
+        print("Qwen 结果预览: searchDiaries=\(text)")
+        return text
     }
 }

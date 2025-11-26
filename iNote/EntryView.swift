@@ -5,6 +5,10 @@ import AVFoundation
 import AVKit
 import UIKit
 
+extension Notification.Name {
+    static let noteSaved = Notification.Name("NoteSaved")
+}
+
 struct EntryView: View {
     @Environment(\.modelContext) private var context
     @StateObject private var vm = EntryViewModel()
@@ -28,26 +32,100 @@ struct EntryView: View {
     @State private var editedTitle: String = ""
     @State private var editedTranscript: String = ""
     @State private var editedSummary: String = ""
+    @State private var editedIntegratedSummary: String = ""
     @State private var editedVisual: String = ""
-    @State private var editedTranscriptHeight: CGFloat = 60
-    @State private var editedSummaryHeight: CGFloat = 60
-    @State private var editedVisualHeight: CGFloat = 60
-    @State private var editedTextHeight: CGFloat = 100
-    @State private var selectedTagNames: Set<String> = []
+    @State private var editedVisualTranscript: String = ""
     @State private var searchText: String = ""
     @FocusState private var searchFocused: Bool
     @Query private var allTags: [Tag]
-    private let tagOptions: [String] = ["开心","生气","难过","工作","运动","睡眠"]
-    enum ConfirmFocus { case title, text, transcript, summary, visual }
+    enum ConfirmFocus { case title, text, transcript, summary, integratedSummary, visual }
     @FocusState private var confirmFocus: ConfirmFocus?
+    
+    // AI Search State
+    @State private var isSearching: Bool = false
+    @State private var aiSearchResponse: String = ""
+    @State private var isLoadingSearch: Bool = false
+    @State private var searchError: String? = nil
+    private let qwenService = QwenService()
 
     var body: some View {
         ZStack {
             AppColors.background.ignoresSafeArea()
             
             VStack(spacing: 12) {
-                SearchBar(text: $searchText, focus: $searchFocused)
+                SearchBar(text: $searchText, focus: $searchFocused, onSubmit: {
+                    performAISearch()
+                }, onCancel: {
+                    isSearching = false
+                    aiSearchResponse = ""
+                    searchError = nil
+                })
+                .padding(.horizontal, AppDimens.padding)
+                
+                // AI Search Response Display
+                if isSearching && !aiSearchResponse.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "sparkles")
+                                .foregroundColor(AppColors.accent)
+                            Text("AI 回答")
+                                .font(AppFonts.headline())
+                                .foregroundColor(AppColors.primaryText)
+                            Spacer()
+                            Button(action: {
+                                isSearching = false
+                                aiSearchResponse = ""
+                                searchError = nil
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(AppColors.secondaryText)
+                            }
+                        }
+                        
+                        Text(aiSearchResponse)
+                            .font(AppFonts.body())
+                            .foregroundColor(AppColors.primaryText)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(AppColors.accent.opacity(0.1))
+                            .cornerRadius(12)
+                    }
                     .padding(.horizontal, AppDimens.padding)
+                    .padding(.vertical, 8)
+                    .background(AppColors.cardBackground)
+                    .cornerRadius(12)
+                    .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
+                    .padding(.horizontal, AppDimens.padding)
+                }
+                
+                // Loading Indicator
+                if isLoadingSearch {
+                    HStack {
+                        ProgressView()
+                        Text("AI 正在分析日记...")
+                            .font(AppFonts.caption())
+                            .foregroundColor(AppColors.secondaryText)
+                    }
+                    .padding()
+                    .background(AppColors.cardBackground)
+                    .cornerRadius(12)
+                    .padding(.horizontal, AppDimens.padding)
+                }
+                
+                // Error Display
+                if let error = searchError {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundColor(AppColors.error)
+                        Text(error)
+                            .font(AppFonts.caption())
+                            .foregroundColor(AppColors.error)
+                    }
+                    .padding()
+                    .background(AppColors.cardBackground)
+                    .cornerRadius(12)
+                    .padding(.horizontal, AppDimens.padding)
+                }
                 // Notes List Area
                 List {
                     ForEach(filteredNotes) { note in
@@ -102,18 +180,23 @@ struct EntryView: View {
             vm.start(context: context)
             Task { await notesVM.refresh(context: context) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .noteSaved)) { _ in
+            Task { await notesVM.refresh(context: context) }
+        }
         .onChange(of: searchFocused) { oldValue, newValue in
             print("DEBUG: searchFocused changed from \(oldValue) to \(newValue)")
         }
         .onChange(of: vm.shouldShowEditor) { _, newValue in
             if newValue {
                 if let note = vm.currentNote {
-                    editedTitle = note.title.isEmpty ? String((note.transcript.isEmpty ? vm.text : note.transcript).prefix(15)) : note.title
-                    editedText = vm.text
+                    let baseText = note.transcript.isEmpty ? note.content : note.transcript
+                    editedTitle = note.title.isEmpty ? String(baseText.prefix(15)) : note.title
+                    editedText = note.content
                     editedTranscript = note.transcript
                     editedSummary = note.summary
+                    editedIntegratedSummary = note.integratedSummary
                     editedVisual = note.visualDescription
-                    if let tags = note.tags { selectedTagNames = Set(tags.compactMap { $0.name }) }
+                    editedVisualTranscript = note.visualTranscript
                 }
                 showTranscriptionEditor = true
                 vm.shouldShowEditor = false
@@ -123,9 +206,18 @@ struct EntryView: View {
         
         .keyboardDismissToolbar("完成") { searchFocused = false }
         .sheet(isPresented: $showTranscriptionEditor) { confirmEditorView() }
+        .sheet(isPresented: $vm.shouldShowLinkInput) {
+            LinkInputView(vm: vm) {
+                Task {
+                    showCamera = false
+                    showMoreMenu = false
+                    await submit()
+                }
+            }
+        }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker(kind: cameraKind, onImageData: { data in
-                Task { await vm.attachImageData([data], context: context) }
+                Task { await vm.createPhotoNote(with: data, context: context) }
             }, onVideoURL: { url in
                 Task { await vm.attachVideoURLs([url], context: context) }
             }, onCancel: {
@@ -152,6 +244,7 @@ struct EntryView: View {
                             
                             Button(action: {
                                 cameraKind = .photo
+                                vm.linkMode = false
                                 showCamera = true
                             }) {
                                 ZStack {
@@ -187,6 +280,7 @@ struct EntryView: View {
                         if vm.recordState == .idle {
                             Button(action: {
                                 cameraKind = .video
+                                vm.linkMode = false
                                 showCamera = true
                             }) {
                                 ZStack {
@@ -300,7 +394,7 @@ struct EntryView: View {
                                             .stroke(AppColors.divider, lineWidth: 1)
                                     )
                                 }
-                                Button(action: { unavailableMessage = "未开放该功能"; showUnavailableAlert = true; showMoreMenu = false }) {
+                                Button(action: { vm.beginNewNote(context: context); vm.linkMode = true; cameraKind = .photo; showCamera = true; showMoreMenu = false }) {
                                     HStack {
                                         Image(systemName: "pencil")
                                             .foregroundColor(AppColors.primaryText)
@@ -383,11 +477,7 @@ struct EntryView: View {
         }
     }
 
-    private func sectionSpacing(for h: CGFloat) -> CGFloat {
-        if h < 80 { return 6 }
-        if h < 140 { return 10 }
-        return 12
-    }
+
     private var filteredNotes: [Note] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if q.isEmpty { return notesVM.notes }
@@ -480,6 +570,87 @@ struct EntryView: View {
         default: return code
         }
     }
+    
+    // MARK: - AI Search Functions
+    
+    private func performAISearch() {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            searchFocused = false
+            return
+        }
+        
+        Task {
+            isLoadingSearch = true
+            isSearching = true
+            searchError = nil
+            aiSearchResponse = ""
+            searchFocused = false
+            
+            do {
+                let diaryContext = buildDiaryContext()
+                let response = try await qwenService.searchDiaries(query: query, diaryContext: diaryContext)
+                aiSearchResponse = response
+            } catch QwenError.missingAPIKey {
+                searchError = "未配置API密钥"
+            } catch QwenError.invalidAPIKey {
+                searchError = "API密钥无效"
+            } catch QwenError.unauthorized(let msg) {
+                searchError = "未授权: \(msg)"
+            } catch QwenError.paymentRequired(let msg) {
+                searchError = "需付费: \(msg)"
+            } catch {
+                searchError = "搜索失败: \(error.localizedDescription)"
+            }
+            
+            isLoadingSearch = false
+        }
+    }
+    
+    private func buildDiaryContext() -> String {
+        var context = ""
+        
+        for (index, note) in notesVM.notes.enumerated() {
+            context += "--- 日记 \(index + 1) ---\n"
+            
+            if !note.title.isEmpty {
+                context += "标题: \(note.title)\n"
+            }
+            
+            if !note.content.isEmpty {
+                context += "内容: \(note.content)\n"
+            }
+            
+            if !note.summary.isEmpty {
+                context += "总结: \(note.summary)\n"
+            }
+            
+            if !note.integratedSummary.isEmpty {
+                context += "综合总结: \(note.integratedSummary)\n"
+            }
+            
+            if !note.transcript.isEmpty {
+                context += "语音逐字稿: \(note.transcript)\n"
+            }
+            
+            if !note.visualDescription.isEmpty {
+                context += "视觉描述: \(note.visualDescription)\n"
+            }
+            
+            if !note.visualTranscript.isEmpty {
+                context += "视觉逐字稿: \(note.visualTranscript)\n"
+            }
+            
+            if let tags = note.tags, !tags.isEmpty {
+                let tagNames = tags.map { $0.name }.joined(separator: ", ")
+                context += "标签: \(tagNames)\n"
+            }
+            
+            context += "\n"
+        }
+        
+        return context
+    }
 
     
 
@@ -490,7 +661,9 @@ struct EntryView: View {
                 AppColors.background.ignoresSafeArea()
                 
                 ScrollView {
-                    VStack(spacing: 0) {
+                    ScrollViewReader { proxy in
+                        VStack(spacing: 0) {
+                        // 1. 标题 (Always Show)
                         VStack(alignment: .leading, spacing: 8) {
                             Text("标题").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
                             TextField("请输入标题", text: $editedTitle)
@@ -501,225 +674,275 @@ struct EntryView: View {
                                 .padding(12)
                                 .background(AppColors.cardBackground)
                                 .cornerRadius(12)
+                                .id(ConfirmFocus.title)
                         }
                         .padding(.horizontal, AppDimens.padding)
+                        .padding(.bottom, 12)
 
-                        if (vm.currentNote?.assets?.contains(where: { $0.kind == MediaKind.audio.rawValue }) ?? false) {
+                        // 2. 图片展示 (Show if assets exist)
+                        if let assets = vm.currentNote?.assets?.filter({ $0.kind == MediaKind.image.rawValue }), !assets.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("逐字稿").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
-                                TextEditor(text: $editedTranscript)
-                                    .focused($confirmFocus, equals: .transcript)
-                                    .scrollContentBackground(.hidden)
-                                    .foregroundColor(AppColors.primaryText)
-                                    .tint(AppColors.primaryText)
-                                    .frame(minHeight: max(60, editedTranscriptHeight))
-                                    .padding(8)
-                                    .background(AppColors.cardBackground)
-                                    .cornerRadius(12)
-                                Text(editedTranscript.isEmpty ? " " : editedTranscript)
-                                    .font(AppFonts.body())
-                                    .foregroundColor(.clear)
-                                    .padding(8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(
-                                        GeometryReader { geo in
-                                            Color.clear
-                                                .onAppear { editedTranscriptHeight = geo.size.height }
-                                                .onChange(of: editedTranscript) { _, _ in editedTranscriptHeight = geo.size.height }
+                                Text("原图片").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
+                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                                    ForEach(Array(assets.enumerated()), id: \.offset) { _, a in
+                                        if let s = a.localURLString, let url = URL(string: s), let data = try? Data(contentsOf: url), let ui = UIImage(data: data) {
+                                            Image(uiImage: ui)
+                                                .resizable()
+                                                .scaledToFill()
+                                                .frame(height: 140)
+                                                .clipped()
+                                                .cornerRadius(12)
                                         }
-                                    )
-                                    .hidden()
+                                    }
+                                }
                             }
                             .padding(.horizontal, AppDimens.padding)
-                            .padding(.bottom, sectionSpacing(for: editedTranscriptHeight))
+                            .padding(.bottom, 12)
                         }
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("AI总结").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
-                            TextEditor(text: $editedSummary)
-                                .focused($confirmFocus, equals: .summary)
-                                .scrollContentBackground(.hidden)
-                                .foregroundColor(AppColors.primaryText)
-                                .tint(AppColors.primaryText)
-                                .frame(minHeight: max(60, editedSummaryHeight))
-                                .padding(8)
-                                .background(AppColors.cardBackground)
-                                .cornerRadius(12)
-                            Text(editedSummary.isEmpty ? " " : editedSummary)
-                                .font(AppFonts.body())
-                                .foregroundColor(.clear)
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    GeometryReader { geo in
-                                        Color.clear
-                                            .onAppear { editedSummaryHeight = geo.size.height }
-                                            .onChange(of: editedSummary) { _, _ in editedSummaryHeight = geo.size.height }
-                                    }
-                                )
-                                .hidden()
+                        // 3. AI 分析结果 (Summary / Integrated Summary)
+                        // Show Integrated Summary if available
+                        if !editedIntegratedSummary.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("综合总结").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
+                                TextField("请输入综合总结", text: $editedIntegratedSummary, axis: .vertical)
+                                    .focused($confirmFocus, equals: .integratedSummary)
+                                    .textFieldStyle(.plain)
+                                    .foregroundColor(AppColors.primaryText)
+                                    .tint(AppColors.primaryText)
+                                    .padding(12)
+                                    .background(AppColors.cardBackground)
+                                    .cornerRadius(12)
+                                    .id(ConfirmFocus.integratedSummary)
+                            }
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.bottom, 12)
                         }
-                        .padding(.horizontal, AppDimens.padding)
-                        .padding(.bottom, sectionSpacing(for: editedSummaryHeight))
+                        
+                        // Show Summary if available
+                        if !editedSummary.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("AI总结").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
+                                TextField("请输入AI总结", text: $editedSummary, axis: .vertical)
+                                    .focused($confirmFocus, equals: .summary)
+                                    .textFieldStyle(.plain)
+                                    .foregroundColor(AppColors.primaryText)
+                                    .tint(AppColors.primaryText)
+                                    .padding(12)
+                                    .background(AppColors.cardBackground)
+                                    .cornerRadius(12)
+                                    .id(ConfirmFocus.summary)
+                            }
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.bottom, 12)
+                        }
 
-                        if (vm.currentNote?.assets?.contains(where: { $0.kind == MediaKind.image.rawValue || $0.kind == MediaKind.video.rawValue }) ?? false) {
+                        // 4. 视觉内容 (Visual Description / Visual Transcript)
+                        if !editedVisual.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("视觉描述").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
-                                TextEditor(text: $editedVisual)
+                                TextField("请输入视觉描述", text: $editedVisual, axis: .vertical)
                                     .focused($confirmFocus, equals: .visual)
-                                    .scrollContentBackground(.hidden)
+                                    .textFieldStyle(.plain)
                                     .foregroundColor(AppColors.primaryText)
                                     .tint(AppColors.primaryText)
-                                    .frame(minHeight: max(60, editedVisualHeight))
-                                    .padding(8)
+                                    .padding(12)
                                     .background(AppColors.cardBackground)
                                     .cornerRadius(12)
-                                Text(editedVisual.isEmpty ? " " : editedVisual)
-                                    .font(AppFonts.body())
-                                    .foregroundColor(.clear)
-                                    .padding(8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(
-                                        GeometryReader { geo in
-                                            Color.clear
-                                                .onAppear { editedVisualHeight = geo.size.height }
-                                                .onChange(of: editedVisual) { _, _ in editedVisualHeight = geo.size.height }
-                                        }
-                                    )
-                                    .hidden()
+                                    .id(ConfirmFocus.visual)
                             }
                             .padding(.horizontal, AppDimens.padding)
-                            .padding(.bottom, sectionSpacing(for: editedVisualHeight))
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.bottom, 12)
                         }
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("文字输入").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
-                            TextEditor(text: $editedText)
-                                .focused($confirmFocus, equals: .text)
-                                .scrollContentBackground(.hidden)
-                                .foregroundColor(AppColors.primaryText)
-                                .tint(AppColors.primaryText)
-                                .frame(minHeight: max(100, editedTextHeight))
-                                .padding(6)
+                        if !editedVisualTranscript.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("视觉逐字稿").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
+                                TextField("请输入视觉逐字稿", text: $editedVisualTranscript, axis: .vertical)
+                                    .focused($confirmFocus, equals: .transcript)
+                                    .textFieldStyle(.plain)
+                                    .foregroundColor(AppColors.primaryText)
+                                    .tint(AppColors.primaryText)
+                                    .padding(12)
+                                    .background(AppColors.cardBackground)
+                                    .cornerRadius(12)
+                                    .id(ConfirmFocus.transcript)
+                            }
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.bottom, 12)
+                        }
+
+                        // 5. 语音/文本内容 (Transcript / Content)
+                        if !editedTranscript.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("语音逐字稿").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
+                                TextField("请输入语音逐字稿", text: $editedTranscript, axis: .vertical)
+                                    .focused($confirmFocus, equals: .transcript)
+                                    .textFieldStyle(.plain)
+                                    .foregroundColor(AppColors.primaryText)
+                                    .tint(AppColors.primaryText)
+                                    .padding(12)
+                                    .background(AppColors.cardBackground)
+                                    .cornerRadius(12)
+                                    .id(ConfirmFocus.transcript)
+                            }
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.bottom, 12)
+                        }
+
+                        // Always show content field if it's not empty, OR if it's the only field available (fallback)
+                        // But usually 'content' is for user notes or link content.
+                        // Always show content field if it's not empty, OR if it's the only field available (fallback)
+                        // But usually 'content' is for user notes or link content.
+                        if !editedText.isEmpty || (editedTranscript.isEmpty && editedVisual.isEmpty && editedVisualTranscript.isEmpty && editedSummary.isEmpty && editedIntegratedSummary.isEmpty) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("正文/备注").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
+                                TextField("请输入正文或备注", text: $editedText, axis: .vertical)
+                                    .focused($confirmFocus, equals: .text)
+                                    .textFieldStyle(.plain)
+                                    .foregroundColor(AppColors.primaryText)
+                                    .tint(AppColors.primaryText)
+                                    .padding(12)
+                                    .background(AppColors.cardBackground)
+                                    .cornerRadius(12)
+                                    .id(ConfirmFocus.text)
+                            }
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.bottom, 12)
+                        }
+                        
+                        
+                        // Tags (AI Generated)
+                        if let tags = vm.currentNote?.tags, !tags.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("标签（AI识别）").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack {
+                                        ForEach(tags, id: \.name) { tag in
+                                            HStack(spacing: 4) {
+                                                Text(tag.name)
+                                                    .font(AppFonts.caption())
+                                                    .foregroundColor(.white)
+                                                Button(action: {
+                                                    // Remove tag
+                                                    vm.currentNote?.tags?.removeAll { $0.name == tag.name }
+                                                }) {
+                                                    Image(systemName: "xmark.circle.fill")
+                                                        .font(.system(size: 14))
+                                                        .foregroundColor(.white.opacity(0.7))
+                                                }
+                                            }
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 6)
+                                            .background(AppColors.accent)
+                                            .cornerRadius(16)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, AppDimens.padding)
+                            .padding(.bottom, 20)
+                        }
+                    }
+                    .padding(.top, 20)
+                    .onChange(of: confirmFocus) { _, newValue in
+                        if let newValue {
+                            withAnimation {
+                                proxy.scrollTo(newValue, anchor: .center)
+                            }
+                        }
+                    }
+                }
+                }
+                .scrollDismissesKeyboard(.interactively)
+                
+                VStack {
+                    Spacer()
+                    HStack {
+                        Button(action: {
+                            // For photo note flow, note is already saved, just close editor
+                            if vm.confirmSource == .photoNote {
+                                showTranscriptionEditor = false
+                                resetUI()
+                            } else {
+                                // For other flows, cancel and reset
+                                vm.cancelRecord(context: context)
+                                showTranscriptionEditor = false
+                                resetUI()
+                            }
+                        }) {
+                            Text("取消")
+                                .font(AppFonts.headline())
+                                .foregroundColor(AppColors.secondaryText)
+                                .frame(maxWidth: .infinity)
+                                .padding()
                                 .background(AppColors.cardBackground)
                                 .cornerRadius(12)
-                            Text(editedText.isEmpty ? " " : editedText)
-                                .font(AppFonts.body())
-                                .foregroundColor(.clear)
-                                .padding(6)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    GeometryReader { geo in
-                                        Color.clear
-                                            .onAppear { editedTextHeight = geo.size.height }
-                                            .onChange(of: editedText) { _, _ in editedTextHeight = geo.size.height }
-                                    }
-                                )
-                                .hidden()
                         }
-                        .padding(.horizontal, AppDimens.padding)
-                        .padding(.bottom, sectionSpacing(for: editedTextHeight))
-
-                        if let tags = vm.currentNote?.tags, !tags.isEmpty {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("标签（AI识别）").font(AppFonts.caption()).foregroundColor(AppColors.secondaryText)
-                                let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
-                                LazyVGrid(columns: columns, spacing: 8) {
-                                    ForEach(tags, id: \.name) { tag in
-                                        Text(tag.name)
-                                            .font(AppFonts.subheadline())
-                                            .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 8)
-                                            .background(AppColors.cardBackground)
-                                            .foregroundColor(AppColors.primaryText)
-                                            .cornerRadius(12)
-                                    }
-                                }
+                        
+                        Button(action: {
+                            Task {
+                                vm.currentNote?.title = editedTitle
+                                vm.currentNote?.content = editedText
+                                vm.currentNote?.transcript = editedTranscript
+                                vm.currentNote?.summary = editedSummary
+                                vm.currentNote?.integratedSummary = editedIntegratedSummary
+                                vm.currentNote?.visualDescription = editedVisual
+                                vm.currentNote?.visualTranscript = editedVisualTranscript
+                                
+                                // Tags are already set by AI, no need to update
+                                
+                                vm.persistAndFinalize(context: context)
+                                showTranscriptionEditor = false
+                                resetUI()
                             }
-                            .padding(.horizontal, AppDimens.padding)
+                        }) {
+                            Text("保存笔记")
+                                .font(AppFonts.headline())
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(AppColors.accent)
+                                .cornerRadius(12)
                         }
-
-                        // 操作按钮移至底部固定栏，避免滚动隐藏
                     }
-                    .padding(.vertical, 12)
+                    .padding()
+                    .background(AppColors.background)
                 }
             }
-            .navigationTitle("")
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("收起键盘") { confirmFocus = nil }
+            .navigationBarHidden(true)
+            .onAppear {
+                if let note = vm.currentNote {
+                    if editedTitle.isEmpty { let base = note.transcript.isEmpty ? note.content : note.transcript; editedTitle = note.title.isEmpty ? String(base.prefix(15)) : note.title }
+                    if editedTranscript.isEmpty { editedTranscript = note.transcript }
+                    if editedSummary.isEmpty { editedSummary = note.summary }
+                    if editedIntegratedSummary.isEmpty { editedIntegratedSummary = note.integratedSummary }
+                    if editedVisual.isEmpty { editedVisual = note.visualDescription }
+                    if editedVisualTranscript.isEmpty { editedVisualTranscript = note.visualTranscript }
+                    if editedText.isEmpty { editedText = note.content }
                 }
-            }
-            .ignoresSafeArea(.keyboard)
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 16) {
-                    Button(action: {
-                        showTranscriptionEditor = false
-                        vm.pendingTranscription = nil
-                        vm.resetSession()
-                        resetUI()
-                    }) {
-                        Text("取消")
-                            .font(AppFonts.headline())
-                            .foregroundColor(AppColors.secondaryText)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(AppColors.cardBackground)
-                            .cornerRadius(12)
-                    }
-                    Button(action: {
-                        vm.text = editedText
-                        if let note = vm.currentNote {
-                            note.title = editedTitle
-                            note.content = editedText
-                            note.transcript = editedTranscript
-                            note.summary = editedSummary
-                            note.visualDescription = editedVisual
-                            var chosen: [Tag] = []
-                            let names = (note.tags ?? []).map { $0.name }
-                            for name in names {
-                                if let existed = allTags.first(where: { $0.name == name }) {
-                                    chosen.append(existed)
-                                } else {
-                                    let t = Tag()
-                                    t.name = name
-                                    context.insert(t)
-                                    chosen.append(t)
-                                }
-                            }
-                            vm.applyTags(chosen)
-                            vm.persistAndFinalize(context: context)
-                            try? context.save()
-                        }
-                        showTranscriptionEditor = false
-                        vm.pendingTranscription = nil
-                        vm.resetSession()
-                        resetUI()
-                    }) {
-                        Text("保存")
-                            .font(AppFonts.headline())
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(AppColors.accent)
-                            .cornerRadius(12)
-                    }
-                }
-                .padding(.horizontal, AppDimens.padding)
-                .padding(.vertical, 6)
-                .background(AppColors.background.opacity(0.9))
             }
         }
     }
 
+
+
     private func resetUI() {
+        print("DEBUG resetUI: Resetting UI state")
         editedTitle = ""
         editedText = ""
         editedTranscript = ""
         editedSummary = ""
+        editedIntegratedSummary = ""
         editedVisual = ""
-        selectedTagNames = []
+        editedVisualTranscript = ""
+        editedVisual = ""
+        editedVisualTranscript = ""
         showLibrary = false
         showAlbumTypeMenu = false
         showMoreMenu = false
@@ -839,8 +1062,15 @@ struct LibraryPicker: UIViewControllerRepresentable {
     }
 
     private func submit() async {
-        guard let note = vm.currentNote else { return }
+        print("DEBUG submit: Function called, vm.currentNote is \(vm.currentNote == nil ? "NIL" : "NOT NIL (title='\(vm.currentNote!.title)')")")
+        guard let note = vm.currentNote else { 
+            print("DEBUG submit: currentNote is nil, cannot submit")
+            return 
+        }
+        print("DEBUG submit: Starting submit for note with title='\(note.title)'")
+        print("DEBUG submit: Before finalize, vm.currentNote is \(vm.currentNote == nil ? "NIL" : "NOT NIL")")
         vm.finalize()
+        print("DEBUG submit: After finalize, vm.currentNote is \(vm.currentNote == nil ? "NIL" : "NOT NIL")")
         let processor = MediaProcessingService()
         note.aiStatus = "requesting"
         note.content = vm.text
@@ -882,7 +1112,7 @@ struct LibraryPicker: UIViewControllerRepresentable {
                 }
             }
         }
-        // Images and video key frames -> description via OpenRouter
+        // 图文合并分析（拍笔记：链接正文 + 手写图片）或仅视觉描述
         var imagesData: [Data] = []
         if let assets = note.assets {
             for a in assets {
@@ -902,13 +1132,149 @@ struct LibraryPicker: UIViewControllerRepresentable {
             }
         }
         do {
-            if !imagesData.isEmpty {
-                let service = QwenService()
-                let desc = try await service.describeImages(imagesData)
-                note.visualDescription = desc
+            let service = QwenService()
+            // 如果存在链接正文且有图片，则一次性多模态请求，返回综合字段
+            if !imagesData.isEmpty && !vm.webContent.isEmpty {
+                // 拍笔记的prompt之一
+                let instruction = """
+                你是专业的图文学习笔记整合助手，需严格按照以下要求整合学习资料与手写笔记，输出唯一的JSON结果（无任何前置、后置或额外文本）。
+                
+                首先，请阅读学习资料正文：
+                \(note.content)
+                
+                然后，请参考手写笔记图片。
+                请基于上述内容生成JSON，各字段需满足：
+                1. "title"：不超过15个汉字，精准概括学习主题
+                2. "integratedSummary"：仅对学习资料正文进行客观摘要，不得添加任何手写笔记内容或个人解读，500字以内
+                3. "summary"：结合学习资料正文与手写笔记，提炼共同核心重点、笔记补充的关键信息或学习收获，500字以内
+                4. "visualTranscript"：准确还原图片中手写笔记的逐字稿
+                5. "tags"：至多5个中文简短标签，覆盖主题领域、核心概念等
+
+                注意：
+                - 所有内容用中文，不得添加外部信息
+                - 严格遵守各字段的字数限制
+                - 仅输出JSON，无其他任何文本
+
+                请直接输出符合要求的JSON。
+                """
+                let out = try await service.analyzeImagesJSON(imagesData, instruction: instruction)
+                func decodeDict(_ s: String) -> [String: Any]? {
+                    if let d = s.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { return obj }
+                    if let first = s.firstIndex(of: "{"), let last = s.lastIndex(of: "}") {
+                        let sub = String(s[first...last])
+                        if let d2 = sub.data(using: .utf8), let obj2 = try? JSONSerialization.jsonObject(with: d2) as? [String: Any] { return obj2 }
+                    }
+                    return nil
+                }
+                func pickStr(_ dict: [String: Any], keys: [String]) -> String? {
+                    var lowered: [String: Any] = [:]
+                    for (k, v) in dict { lowered[k.lowercased()] = v }
+                    for k in keys {
+                        if let v = dict[k] as? String, !v.isEmpty { return v }
+                        if let v = lowered[k.lowercased()] as? String, !v.isEmpty { return v }
+                    }
+                    return nil
+                }
+                func pickArr(_ dict: [String: Any], keys: [String]) -> [String]? {
+                    var lowered: [String: Any] = [:]
+                    for (k, v) in dict { lowered[k.lowercased()] = v }
+                    for k in keys {
+                        if let v = dict[k] as? [String], !v.isEmpty { return v }
+                        if let v = lowered[k.lowercased()] as? [String], !v.isEmpty { return v }
+                    }
+                    return nil
+                }
+                if let dict = decodeDict(out) {
+                    if let t = pickStr(dict, keys: ["title", "标题"]) { note.title = t }
+                    if let sum = pickStr(dict, keys: ["summary", "摘要", "总结"]) { note.summary = sum }
+                    if let isum = pickStr(dict, keys: ["integratedSummary", "综合总结", "整合总结"]) { note.integratedSummary = isum }
+                    if let vtr = pickStr(dict, keys: ["visualTranscript", "图片逐字稿", "手写逐字稿", "逐字稿"]) { note.visualTranscript = vtr }
+                    if let tagNames = pickArr(dict, keys: ["tags", "标签"]) {
+                        var tags: [Tag] = []
+                        for name in tagNames.prefix(5) {
+                            if let existed = note.tags?.first(where: { $0.name == name }) { tags.append(existed) }
+                            else { let t = Tag(); t.name = name; tags.append(t) }
+                        }
+                        note.tags = tags
+                    }
+                    if (note.integratedSummary.isEmpty && note.summary.isEmpty) {
+                        let fallback = offlineSummary(for: note)
+                        if !fallback.isEmpty { note.summary = fallback }
+                    }
+                }
+            } else {
+                if !imagesData.isEmpty {
+                    // 拍笔记的prompt之二
+                    let instruction = """
+                    你是专业的图文学习笔记整合助手，需严格按照以下要求整合手写笔记，输出唯一的JSON结果（无任何前置、后置或额外文本）。
+
+                    请根据手写笔记图片生成JSON，各字段需满足：
+                    1. "title"：不超过15个汉字，精准概括学习主题
+                    2. "summary"：基于手写笔记提炼核心重点、关键信息或学习收获，500字以内
+                    3. "visualTranscript"：准确还原图片中手写笔记的逐字稿
+                    4. "tags"：至多5个中文简短标签，覆盖主题领域、核心概念等
+
+                    注意：
+                    - 所有内容用中文，不得添加外部信息
+                    - 严格遵守各字段的字数限制
+                    - 仅输出JSON，无其他任何文本
+                    """
+                    let out = try await service.analyzeImagesJSON(imagesData, instruction: instruction)
+                    func decodeDict(_ s: String) -> [String: Any]? {
+                        if let d = s.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { return obj }
+                        if let first = s.firstIndex(of: "{"), let last = s.lastIndex(of: "}") {
+                            let sub = String(s[first...last])
+                            if let d2 = sub.data(using: .utf8), let obj2 = try? JSONSerialization.jsonObject(with: d2) as? [String: Any] { return obj2 }
+                        }
+                        return nil
+                    }
+                    func pickStr(_ dict: [String: Any], keys: [String]) -> String? {
+                        var lowered: [String: Any] = [:]
+                        for (k, v) in dict { lowered[k.lowercased()] = v }
+                        for k in keys {
+                            if let v = dict[k] as? String, !v.isEmpty { return v }
+                            if let v = lowered[k.lowercased()] as? String, !v.isEmpty { return v }
+                        }
+                        return nil
+                    }
+                    func pickArr(_ dict: [String: Any], keys: [String]) -> [String]? {
+                        var lowered: [String: Any] = [:]
+                        for (k, v) in dict { lowered[k.lowercased()] = v }
+                        for k in keys {
+                            if let v = dict[k] as? [String], !v.isEmpty { return v }
+                            if let v = lowered[k.lowercased()] as? [String], !v.isEmpty { return v }
+                        }
+                        return nil
+                    }
+                    if let dict = decodeDict(out) {
+                        if let t = pickStr(dict, keys: ["title", "标题"]) { note.title = t }
+                        if let sum = pickStr(dict, keys: ["summary", "总结"]) { note.summary = sum }
+                        if let vtr = pickStr(dict, keys: ["visualTranscript", "图片逐字稿", "手写逐字稿", "逐字稿"]) { note.visualTranscript = vtr }
+                        if let tagNames = pickArr(dict, keys: ["tags", "标签"]) {
+                            var tags: [Tag] = []
+                            for name in tagNames.prefix(5) {
+                                if let existed = note.tags?.first(where: { $0.name == name }) { tags.append(existed) }
+                                else { let t = Tag(); t.name = name; tags.append(t) }
+                            }
+                            note.tags = tags
+                        }
+                    }
+                } else {
+                    try await processor.summarizeAndDescribe(note: note)
+                }
             }
-            try await processor.summarizeAndDescribe(note: note)
             note.aiStatus = "success"
+            print("DEBUG submit: AI processing succeeded, note title='\(note.title)'")
+            editedTitle = note.title.isEmpty ? String((note.transcript.isEmpty ? note.content : note.transcript).prefix(15)) : note.title
+            editedTranscript = note.transcript
+            editedSummary = note.integratedSummary.isEmpty ? note.summary : note.integratedSummary
+            editedVisual = note.visualDescription
+            editedVisualTranscript = note.visualTranscript
+            print("DEBUG submit: About to call persistIfNeeded with local note variable")
+            vm.persistIfNeeded(context: context, note: note)
+            print("DEBUG submit: Called persistIfNeeded, setting confirmSource and shouldShowEditor")
+            vm.confirmSource = .photoNote
+            vm.shouldShowEditor = true
         } catch {
             if let e = error as? QwenError {
                 switch e {
@@ -924,6 +1290,11 @@ struct LibraryPicker: UIViewControllerRepresentable {
             }
             let offline = offlineSummary(for: note)
             if !offline.isEmpty { note.summary = offline }
+            print("DEBUG submit: AI processing failed, calling persistIfNeeded with local note variable")
+            vm.persistIfNeeded(context: context, note: note)
+            print("DEBUG submit: Called persistIfNeeded after error, setting confirmSource and shouldShowEditor")
+            vm.confirmSource = .photoNote
+            vm.shouldShowEditor = true
         }
     }
 
@@ -945,6 +1316,97 @@ struct LibraryPicker: UIViewControllerRepresentable {
                     cont.resume(throwing: error ?? NSError(domain: "AVAssetImageGenerator", code: -1))
                 }
             }
+        }
+    }
+}
+
+struct LinkInputView: View {
+    @ObservedObject var vm: EntryViewModel
+    var onNext: () -> Void
+    @State private var urlText: String = ""
+    @State private var isFetching: Bool = false
+    @State private var fetchError: String = ""
+    var body: some View {
+        NavigationView {
+            ZStack {
+                AppColors.background.ignoresSafeArea()
+                VStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("可选链接")
+                            .font(AppFonts.caption())
+                            .foregroundColor(AppColors.secondaryText)
+                        TextField("请输入URL（可选）", text: $urlText)
+                            .textInputAutocapitalization(.never)
+                            .keyboardType(.URL)
+                            .autocorrectionDisabled(true)
+                            .foregroundColor(AppColors.primaryText)
+                            .tint(AppColors.primaryText)
+                            .padding(12)
+                            .background(AppColors.cardBackground)
+                            .cornerRadius(12)
+                    }
+                    .padding(.horizontal, AppDimens.padding)
+
+                    if !fetchError.isEmpty {
+                        Text(fetchError)
+                            .font(AppFonts.caption())
+                            .foregroundColor(AppColors.error)
+                            .padding(.horizontal, AppDimens.padding)
+                    }
+
+                    Spacer()
+
+                    HStack(spacing: 12) {
+                        Button(action: {
+                            Task {
+                                isFetching = true
+                                fetchError = ""
+                                let u = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !u.isEmpty {
+                                    let content = await vm.fetchWebContent(from: u)
+                                    if content.isEmpty {
+                                        fetchError = "正文提取失败或服务不可用"
+                                    }
+                                    vm.webContent = content
+                                    vm.pendingLinkURL = u
+                                    // Save link URL to note
+                                    if let note = vm.currentNote {
+                                        note.linkURL = u
+                                    }
+                                }
+                                let combined = [vm.webContent, vm.text].filter { !$0.isEmpty }.joined(separator: "\n")
+                                vm.text = combined
+                                if let note = vm.currentNote { 
+                                    note.content = combined 
+                                }
+                                isFetching = false
+                                vm.shouldShowLinkInput = false
+                                vm.linkMode = false
+                                onNext()
+                            }
+                        }) {
+                            if isFetching {
+                                ProgressView()
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(AppColors.accent)
+                                    .cornerRadius(12)
+                            } else {
+                                Text("下一步")
+                                    .font(AppFonts.headline())
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(AppColors.accent)
+                                    .cornerRadius(12)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, AppDimens.padding)
+                    .padding(.bottom, 12)
+                }
+            }
+            .navigationTitle("链接提取")
         }
     }
 }
