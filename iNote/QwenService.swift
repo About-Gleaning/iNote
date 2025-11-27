@@ -258,4 +258,58 @@ extension QwenService {
         print("Qwen 结果预览: searchDiaries=\(text)")
         return text
     }
+    func consult(query: String, context: String) async throws -> String {
+        guard let key = apiKey, !key.isEmpty else { throw QwenError.missingAPIKey }
+        if key.uppercased().contains("YOUR_OPENROUTER_API_KEY") { throw QwenError.invalidAPIKey }
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.addValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let now = Date().formatted(date: .numeric, time: .standard)
+        let systemPrompt = """
+        你是一个智能咨询助手。当前时间是：\(now)。
+        用户会向你咨询问题，你需要结合用户的笔记内容（上下文）来回答。
+        
+        请输出 JSON 格式，包含以下字段：
+        {
+            "reply_content": "你的回答内容，可以使用 Markdown 格式",
+            "source_notes": ["推测出回答的笔记标题1", "推测出回答的笔记标题2"]
+        }
+        
+        如果回答不依赖任何笔记，source_notes 可以为空数组。
+        
+        用户的笔记上下文：
+        \(context)
+        """
+        
+        let userMessage = "用户咨询：\(query)"
+        
+        let content: [AnyEncodable] = [
+            AnyEncodable(MessageContent.text(systemPrompt)),
+            AnyEncodable(MessageContent.text(userMessage))
+        ]
+        let items: [ChatPayload.Item] = [.init(role: "user", content: content)]
+        
+        let payload = ChatPayload(model: textModel, messages: items, temperature: 0.2)
+        req.httpBody = try JSONEncoder().encode(payload)
+        
+        print("Qwen 调用开始: consult, 模型=\(textModel)")
+        
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        let bodyPreview = String(data: data, encoding: .utf8) ?? ""
+        
+        if status != 200 {
+            let preview = String(bodyPreview.prefix(300))
+            if status == 401 { throw QwenError.unauthorized(preview) }
+            if status == 402 { throw QwenError.paymentRequired(preview) }
+            throw QwenError.httpError(status, preview)
+        }
+        
+        let res = try JSONDecoder().decode(ChatResponse.self, from: data)
+        let text = res.choices.first?.message.content ?? ""
+        print("Qwen 结果预览: consult=\(text)")
+        return text
+    }
 }

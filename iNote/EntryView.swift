@@ -27,6 +27,7 @@ struct EntryView: View {
     @State private var showDeleteConfirm: Bool = false
     @State private var pendingDeleteNote: Note?
     @State private var selectedNoteForNavigation: Note?
+    @State private var showVoiceConsultation: Bool = false
     @State private var showTranscriptionEditor: Bool = false
     @State private var editedText: String = ""
     @State private var editedTitle: String = ""
@@ -35,17 +36,10 @@ struct EntryView: View {
     @State private var editedIntegratedSummary: String = ""
     @State private var editedVisual: String = ""
     @State private var editedVisualTranscript: String = ""
-    @State private var searchText: String = ""
-    @FocusState private var searchFocused: Bool
     @Query private var allTags: [Tag]
     enum ConfirmFocus { case title, text, transcript, summary, integratedSummary, visual }
     @FocusState private var confirmFocus: ConfirmFocus?
     
-    // AI Search State
-    @State private var isSearching: Bool = false
-    @State private var aiSearchResponse: String = ""
-    @State private var isLoadingSearch: Bool = false
-    @State private var searchError: String? = nil
     private let qwenService = QwenService()
 
     var body: some View {
@@ -53,90 +47,13 @@ struct EntryView: View {
             AppColors.background.ignoresSafeArea()
             
             VStack(spacing: 12) {
-                SearchBar(text: $searchText, focus: $searchFocused, onSubmit: {
-                    performAISearch()
-                }, onCancel: {
-                    isSearching = false
-                    aiSearchResponse = ""
-                    searchError = nil
-                })
-                .padding(.horizontal, AppDimens.padding)
-                
-                // AI Search Response Display
-                if isSearching && !aiSearchResponse.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Image(systemName: "sparkles")
-                                .foregroundColor(AppColors.accent)
-                            Text("AI 回答")
-                                .font(AppFonts.headline())
-                                .foregroundColor(AppColors.primaryText)
-                            Spacer()
-                            Button(action: {
-                                isSearching = false
-                                aiSearchResponse = ""
-                                searchError = nil
-                            }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(AppColors.secondaryText)
-                            }
-                        }
-                        
-                        Text(aiSearchResponse)
-                            .font(AppFonts.body())
-                            .foregroundColor(AppColors.primaryText)
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(AppColors.accent.opacity(0.1))
-                            .cornerRadius(12)
-                    }
-                    .padding(.horizontal, AppDimens.padding)
-                    .padding(.vertical, 8)
-                    .background(AppColors.cardBackground)
-                    .cornerRadius(12)
-                    .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
-                    .padding(.horizontal, AppDimens.padding)
-                }
-                
-                // Loading Indicator
-                if isLoadingSearch {
-                    HStack {
-                        ProgressView()
-                        Text("AI 正在分析日记...")
-                            .font(AppFonts.caption())
-                            .foregroundColor(AppColors.secondaryText)
-                    }
-                    .padding()
-                    .background(AppColors.cardBackground)
-                    .cornerRadius(12)
-                    .padding(.horizontal, AppDimens.padding)
-                }
-                
-                // Error Display
-                if let error = searchError {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundColor(AppColors.error)
-                        Text(error)
-                            .font(AppFonts.caption())
-                            .foregroundColor(AppColors.error)
-                    }
-                    .padding()
-                    .background(AppColors.cardBackground)
-                    .cornerRadius(12)
-                    .padding(.horizontal, AppDimens.padding)
-                }
                 // Notes List Area
                 List {
                     ForEach(filteredNotes) { note in
                         NoteCardView(note: note)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if searchFocused {
-                                    searchFocused = false
-                                } else {
-                                    selectedNoteForNavigation = note
-                                }
+                                selectedNoteForNavigation = note
                             }
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 0, leading: AppDimens.padding, bottom: 0, trailing: AppDimens.padding))
@@ -174,6 +91,21 @@ struct EntryView: View {
                 statusArea()
                 Spacer()
             }
+            
+            FloatingHomeButton { option in
+                print("Selected option: \(option.rawValue)")
+                // Handle menu selection here
+                switch option {
+                case .voiceConsultation:
+                    showVoiceConsultation = true
+                case .todaySummary:
+                    // TODO: Implement Today's Summary
+                    break
+                case .weeklySummary:
+                    // TODO: Implement Weekly Summary
+                    break
+                }
+            }
         }
         
         .onAppear {
@@ -182,9 +114,6 @@ struct EntryView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .noteSaved)) { _ in
             Task { await notesVM.refresh(context: context) }
-        }
-        .onChange(of: searchFocused) { oldValue, newValue in
-            print("DEBUG: searchFocused changed from \(oldValue) to \(newValue)")
         }
         .onChange(of: vm.shouldShowEditor) { _, newValue in
             if newValue {
@@ -204,7 +133,6 @@ struct EntryView: View {
             }
         }
         
-        .keyboardDismissToolbar("完成") { searchFocused = false }
         .sheet(isPresented: $showTranscriptionEditor) { confirmEditorView() }
         .sheet(isPresented: $vm.shouldShowLinkInput) {
             LinkInputView(vm: vm) {
@@ -214,6 +142,9 @@ struct EntryView: View {
                     await submit()
                 }
             }
+        }
+        .fullScreenCover(isPresented: $showVoiceConsultation) {
+            VoiceConsultationView()
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker(kind: cameraKind, onImageData: { data in
@@ -230,7 +161,7 @@ struct EntryView: View {
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
 
-                if vm.mode == .audioText && !searchFocused {
+                if vm.mode == .audioText {
                     HStack {
                         if vm.recordState == .idle {
                             Button(action: { showMoreMenu = true }) {
@@ -479,19 +410,12 @@ struct EntryView: View {
 
 
     private var filteredNotes: [Note] {
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if q.isEmpty { return notesVM.notes }
-        return notesVM.notes.filter { note in
-            note.title.lowercased().contains(q)
-            || note.content.lowercased().contains(q)
-            || note.summary.lowercased().contains(q)
-        }
+        return notesVM.notes
     }
 
     
-
-
-
+    
+    
     @ViewBuilder
     private func modeArea() -> some View {
         switch vm.mode {
@@ -571,86 +495,10 @@ struct EntryView: View {
         }
     }
     
-    // MARK: - AI Search Functions
+    // MARK: - AI Search Functions (Removed)
     
-    private func performAISearch() {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else {
-            searchFocused = false
-            return
-        }
-        
-        Task {
-            isLoadingSearch = true
-            isSearching = true
-            searchError = nil
-            aiSearchResponse = ""
-            searchFocused = false
-            
-            do {
-                let diaryContext = buildDiaryContext()
-                let response = try await qwenService.searchDiaries(query: query, diaryContext: diaryContext)
-                aiSearchResponse = response
-            } catch QwenError.missingAPIKey {
-                searchError = "未配置API密钥"
-            } catch QwenError.invalidAPIKey {
-                searchError = "API密钥无效"
-            } catch QwenError.unauthorized(let msg) {
-                searchError = "未授权: \(msg)"
-            } catch QwenError.paymentRequired(let msg) {
-                searchError = "需付费: \(msg)"
-            } catch {
-                searchError = "搜索失败: \(error.localizedDescription)"
-            }
-            
-            isLoadingSearch = false
-        }
-    }
-    
-    private func buildDiaryContext() -> String {
-        var context = ""
-        
-        for (index, note) in notesVM.notes.enumerated() {
-            context += "--- 日记 \(index + 1) ---\n"
-            
-            if !note.title.isEmpty {
-                context += "标题: \(note.title)\n"
-            }
-            
-            if !note.content.isEmpty {
-                context += "内容: \(note.content)\n"
-            }
-            
-            if !note.summary.isEmpty {
-                context += "总结: \(note.summary)\n"
-            }
-            
-            if !note.integratedSummary.isEmpty {
-                context += "综合总结: \(note.integratedSummary)\n"
-            }
-            
-            if !note.transcript.isEmpty {
-                context += "语音逐字稿: \(note.transcript)\n"
-            }
-            
-            if !note.visualDescription.isEmpty {
-                context += "视觉描述: \(note.visualDescription)\n"
-            }
-            
-            if !note.visualTranscript.isEmpty {
-                context += "视觉逐字稿: \(note.visualTranscript)\n"
-            }
-            
-            if let tags = note.tags, !tags.isEmpty {
-                let tagNames = tags.map { $0.name }.joined(separator: ", ")
-                context += "标签: \(tagNames)\n"
-            }
-            
-            context += "\n"
-        }
-        
-        return context
-    }
+    // private func performAISearch() { ... }
+    // private func buildDiaryContext() -> String { ... }
 
     
 
