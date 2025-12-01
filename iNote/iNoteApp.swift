@@ -9,8 +9,16 @@ import SwiftUI
 import SwiftData
 import CloudKit
 
+// AppDelegate to enforce portrait orientation
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        return .portrait
+    }
+}
+
 @main
 struct iNoteApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Note.self,

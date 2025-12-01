@@ -17,7 +17,6 @@ final class QwenService {
         if let envKey = ProcessInfo.processInfo.environment["DASHSCOPE_API_KEY"], !envKey.isEmpty { return envKey }
         return Bundle.main.object(forInfoDictionaryKey: "DashScopeAPIKey") as? String
     }
-    private let textModel = "qwen3-max"
     private let omniModel = "qwen3-omni-flash"
 
     func chat(prompt: String) async throws -> String {
@@ -310,6 +309,67 @@ extension QwenService {
         let res = try JSONDecoder().decode(ChatResponse.self, from: data)
         let text = res.choices.first?.message.content ?? ""
         print("Qwen 结果预览: consult=\(text)")
+        return text
+    }
+    
+    func summarizeToday(notes: String) async throws -> String {
+        guard let key = apiKey, !key.isEmpty else { throw QwenError.missingAPIKey }
+        if key.uppercased().contains("YOUR_OPENROUTER_API_KEY") { throw QwenError.invalidAPIKey }
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.addValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let now = Date()
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy年MM月dd日"
+        let todayString = dateFormatter.string(from: now)
+        
+        let systemPrompt = """
+        你是一个智能日记助手。今天是\(todayString)。
+        
+        用户今天记录了以下笔记内容，请为用户生成一份今日总结。
+        
+        总结要求：
+        1. 概括今天的主要活动和事件
+        2. 提炼关键信息和重要时刻
+        3. 分析今天的情绪和状态
+        4. 给出简短的反思或建议
+        5. 使用温暖、友好的语气
+        6. 总结应该简洁但全面，大约200-400字
+        
+        今日笔记内容：
+        \(notes)
+        """
+        
+        let content: [AnyEncodable] = [AnyEncodable(MessageContent.text(systemPrompt))]
+        let items: [ChatPayload.Item] = [.init(role: "user", content: content)]
+        
+        let payload = ChatPayload(model: textModel, messages: items, temperature: 0.3)
+        req.httpBody = try JSONEncoder().encode(payload)
+        
+        print("========== 今日总结 AI Prompt 开始 ==========")
+        print(systemPrompt)
+        print("========== 今日总结 AI Prompt 结束 ==========")
+        print("Qwen 调用开始: summarizeToday, 模型=\(textModel), 笔记长度=\(notes.count)")
+
+        
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        let bodyPreview = String(data: data, encoding: .utf8) ?? ""
+        print("Qwen 返回: summarizeToday, 状态=\(status), 字节数=\(data.count)")
+        
+        if status != 200 {
+            let preview = String(bodyPreview.prefix(300))
+            print("Qwen 错误响应预览: summarizeToday=\(preview)")
+            if status == 401 { throw QwenError.unauthorized(preview) }
+            if status == 402 { throw QwenError.paymentRequired(preview) }
+            throw QwenError.httpError(status, preview)
+        }
+        
+        let res = try JSONDecoder().decode(ChatResponse.self, from: data)
+        let text = res.choices.first?.message.content ?? ""
+        print("Qwen 结果预览: summarizeToday=\(text.prefix(100))...")
         return text
     }
 }

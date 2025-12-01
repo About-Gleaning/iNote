@@ -166,6 +166,7 @@ struct VoiceConsultationView: View {
                     .background(AppColors.background)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .fullScreenCover(item: $selectedNote) { note in
             NoteDetailView(note: note)

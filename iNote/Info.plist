@@ -26,5 +26,9 @@
 	<string>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</string>
 	<key>DashScopeAPIKey</key>
 	<string>sk-898c7056a2a44ae6ba0de623b21d204d</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
 </dict>
 </plist>

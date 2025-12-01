@@ -28,6 +28,7 @@ struct EntryView: View {
     @State private var pendingDeleteNote: Note?
     @State private var selectedNoteForNavigation: Note?
     @State private var showVoiceConsultation: Bool = false
+    @State private var showTodaySummary: Bool = false
     @State private var showTranscriptionEditor: Bool = false
     @State private var editedText: String = ""
     @State private var editedTitle: String = ""
@@ -99,8 +100,7 @@ struct EntryView: View {
                 case .voiceConsultation:
                     showVoiceConsultation = true
                 case .todaySummary:
-                    // TODO: Implement Today's Summary
-                    break
+                    showTodaySummary = true
                 case .weeklySummary:
                     // TODO: Implement Weekly Summary
                     break
@@ -145,6 +145,9 @@ struct EntryView: View {
         }
         .fullScreenCover(isPresented: $showVoiceConsultation) {
             VoiceConsultationView()
+        }
+        .fullScreenCover(isPresented: $showTodaySummary) {
+            TodaySummaryView()
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker(kind: cameraKind, onImageData: { data in
